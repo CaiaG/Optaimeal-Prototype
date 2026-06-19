@@ -1,0 +1,67 @@
+.container { 
+    max-width: 1280px;
+     margin: 0 auto;
+      padding: 0 2rem;
+}
+
+.hero {
+    text-align: center; 
+    padding: 6rem 0; 
+}
+
+.grid { 
+    display: grid; 
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+    gap: 2rem; 
+    margin-top: 3rem; 
+}
+
+.card { padding: 2.5rem; 
+    border: 1px solid #e5e7eb; 
+    border-radius: 1rem; 
+    text-align: center; 
+    background: white; 
+}
+
+.btnRed { 
+    background: #dc2626; 
+    color: white; padding: 1rem; 
+    border-radius: 0.5rem; 
+    width: 100%; border: none; 
+    cursor: pointer; 
+}
+
+.btnGreen { 
+    background: #059669; 
+    color: white; padding: 1rem; 
+    border-radius: 0.5rem; 
+    width: 100%; 
+    border: none; 
+    cursor: pointer; 
+}
+
+.nav {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 4rem;
+  padding: 0 2rem;
+  border-bottom: 1px solid #e5e7eb;
+  background: white;
+}
+
+.logo {
+  grid-column: 2;
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #4f46e5;
+}
+
+.btnNav {
+  justify-self: end;
+  font-weight: 700;
+  color: #4f46e5;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
