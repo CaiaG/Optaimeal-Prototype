@@ -2,11 +2,11 @@ import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import Home from './pages/Home';
 import PageClient from './pages/PageClient';
 import PageOpp from './pages/PageOpp';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 function App() {
 
-  // example
+  // example call
   useEffect(() => {
     // connect to backend
     fetch('http://localhost:8000/')
@@ -19,8 +19,8 @@ function App() {
     <Router>
       <nav>
         <Link to="/">Home</Link>
-        <Link to="/client">Page One</Link>
-        <Link to="/opp">Page Two</Link>
+        <Link to="/client">Page Client</Link>
+        <Link to="/opp">Page Opp</Link>
       </nav>
 
       <Routes>
