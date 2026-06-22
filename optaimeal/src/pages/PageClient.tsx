@@ -7,35 +7,38 @@ interface MealPlan {
   day: string;
   date: string;
   meal_name: string;
-  calories: number;
-  ingredients: number[];
+  //meal_id: number;
+  //calories_per_serve: number;
+  //nutritional_score: number;
+  ingredients: string[];
 }
 
 const MOCK_WEEKLY_MENU = [
-  { day: "Monday", date: "2026-06-22", meal_name: "Gobbeldy Gook", calories: 450, ingredients: [1] },
-  { day: "Tuesday", date: "2026-06-23", meal_name: "Codswallop", calories: 312, ingredients: [2, 3] },
-  { day: "Wednesday", date: "2026-06-23", meal_name: "Balderdash", calories: 5, ingredients: [2, 4] },
-  { day: "Thursday", date: "2026-06-23", meal_name: "Stinky Winky", calories: 17, ingredients: [1, 3, 5] },
-  { day: "Friday", date: "2026-06-23", meal_name: "Bubble and Squeak", calories: 723, ingredients: [2, 3, 7] },
-  { day: "Saturday", date: "2026-06-23", meal_name: "Upsy Daisy", calories: 222, ingredients: [1, 5, 6] },
-  { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: [7, 8, 9] },
+  { day: "Monday", date: "2026-06-22", meal_name: "Gobbeldy Gook", calories: 450, ingredients: ["aadffa", "onpasj", "oihohoi"] },
+  { day: "Tuesday", date: "2026-06-23", meal_name: "Codswallop", calories: 312, ingredients: ["ajkbc"] },
+  { day: "Wednesday", date: "2026-06-23", meal_name: "Balderdash", calories: 5, ingredients: ["ljdvh"] },
+  { day: "Thursday", date: "2026-06-23", meal_name: "Stinky Winky", calories: 17, ingredients: ["bndakv"] },
+  { day: "Friday", date: "2026-06-23", meal_name: "Bubble and Squeak", calories: 723, ingredients: ["bwg e"] },
+  { day: "Saturday", date: "2026-06-23", meal_name: "Upsy Daisy", calories: 222, ingredients: ["ph ei "] },
+  { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: ["oqhtn"] },
 ];
 
 export default function PageOne() {
-  const dayToIndex: Record<string, number>= {
-  "Monday": 0,
-  "Tuesday": 1,
-  "Wednesday" : 2,
-  "Thursday" : 3,
-  "Friday" : 4,
-  "Saturday" : 5,
-  "Sunday" : 6,
-  };
+  
 
   const [activeView, setActiveView] = useState('main'); 
   const [weeklyAssignment, setWeeklyAssignment] = useState<MealPlan[]>([]);
   const [selectedDay, setSelectedDay] = useState('Monday'); 
+  const [unavailableIngredients, setUnavailableIngredients] = useState<string[]>([]);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
+  const toggleIngredient = (ingredientName: string) => {
+    setUnavailableIngredients((prev) =>
+      prev.includes(ingredientName)
+        ? prev.filter((i) => i !== ingredientName)
+        : [...prev, ingredientName]             
+    );
+  };
 
   useEffect(() => {
     setWeeklyAssignment(MOCK_WEEKLY_MENU);
@@ -45,6 +48,16 @@ export default function PageOne() {
     }
   }, []);
 
+  const currentMeal = weeklyAssignment.find(m => m.day === selectedDay);
+
+  const handleRegeneration = () => {
+    setIsRegenerating(true);
+    // send req
+    setTimeout(() => {
+      setIsRegenerating(false);
+      // update the weekly state 
+    }, 2500); // 2.5 seconds placeholder
+  };
 
   return (
     <div className={styles.client_container}>
@@ -59,25 +72,64 @@ export default function PageOne() {
      
         {/* Mini Calendar */}
         <aside className={styles.mini_calendar}>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Monday')}>Monday</button>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Tuesday')}>Tuesday</button>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Wednesday')}>Wednesday</button>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Thursday')} >Thursday</button>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Friday')}>Friday</button>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Saturday')}>Saturday</button>
-          <button className={styles.mini_calendar_btns} onClick={() => setSelectedDay('Sunday')}>Sunday</button>
+         {weeklyAssignment.map((m) => (
+            <button 
+              key={m.day} 
+              className={`${styles.mini_calendar_btns} ${selectedDay === m.day ? styles.active : ''}`}
+              onClick={() => setSelectedDay(m.day)}
+            >
+              {m.day}
+            </button>
+          ))}
         </aside>
       </div>
 
       <main className={styles.main_content}>
-        {activeView === 'main' ? (
+        {activeView === 'main' && currentMeal ? (
           <div className="meal-details-view">
-          <h1>{selectedDay}</h1>
-          <p>{weeklyAssignment[dayToIndex[selectedDay]]?.meal_name}</p>
-          <section className="stats">Calories: 450 kcal | Protein: 20g</section>
-          <section className="ingredients">
-            <label><input type="checkbox" /> Ingredient 1</label>
+          <header>
+            <h1>{currentMeal.day} - {currentMeal.date}</h1>
+            <h2>{currentMeal.meal_name}</h2>
+          </header>
+          
+          <section className={styles.stats_box}>
+              {/* not in mp obj yet */}
           </section>
+
+          <section className={styles.quantity_section}>
+            <label>Nr of students: </label>
+            <input type="number" placeholder="q" />
+          </section>
+
+          <section className={styles.ingredients}>
+            <h3>Ingredients Checklist</h3>
+            <p><small>Mark unavailable items with an [X]</small></p>
+            
+            {currentMeal.ingredients.map((ing, i) => {
+              const isUnavailable = unavailableIngredients.includes(ing);
+              
+              return (
+                <div 
+                  key={i} 
+                  className={`${styles.ingredient_item} ${isUnavailable ? styles.crossed_out : ''}`}
+                  onClick={() => toggleIngredient(ing)}
+                >
+                  <span className={styles.custom_checkbox}>
+                    {isUnavailable ? 'X' : ''}
+                  </span>
+                  <label>{ing}</label>
+                </div>
+              );
+            })}
+          </section>
+          <button 
+            className={styles.regenerate_btn}
+            onClick={handleRegeneration}
+            disabled={isRegenerating}
+          >
+            {isRegenerating ? "Optimizing..." : "Regenerate Meal"}
+
+          </button>
         </div>
 
         ) : activeView === 'chat' ? (

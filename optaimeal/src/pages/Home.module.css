@@ -65,3 +65,24 @@
   background: none;
   cursor: pointer;
 }
+
+.ingredient_item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 5px 0;
+}
+
+.custom_checkbox {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-family: Arial, sans-serif;
+  color: #d9534f; 
+  background: #fff;
+}
