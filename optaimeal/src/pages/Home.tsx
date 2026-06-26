@@ -21,7 +21,7 @@ const Home: React.FC = () => {
         <div className={styles.grid}>
           <div className={styles.card}>
             <h3>For Kitchens</h3>
-            <p>blah.</p>
+            <p>...</p>
 
             <button className={styles.btnRed} onClick={() => handleNavigation('/client')}>
               Client
@@ -30,7 +30,7 @@ const Home: React.FC = () => {
 
           <div className={styles.card}>
             <h3>For Operators</h3>
-            <p>blah2.</p>
+            <p>...</p>
             <button className={styles.btnGreen} onClick={() => handleNavigation('/opp')}>
               Operator
             </button>

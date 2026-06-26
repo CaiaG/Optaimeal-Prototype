@@ -23,15 +23,19 @@ const MOCK_WEEKLY_MENU = [
   { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: ["oqhtn"] },
 ];
 
-export default function PageOne() {
+export default function PageClient() {
   
-
   const [activeView, setActiveView] = useState('main'); 
   const [weeklyAssignment, setWeeklyAssignment] = useState<MealPlan[]>([]);
   const [selectedDay, setSelectedDay] = useState('Monday'); 
   const [unavailableIngredients, setUnavailableIngredients] = useState<string[]>([]);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [chatHistory, setChatHistory] = useState([
+  { sender: 'System', text: "Start chat" }
+]);
 
+  // ingredient checklist toggle
   const toggleIngredient = (ingredientName: string) => {
     setUnavailableIngredients((prev) =>
       prev.includes(ingredientName)
@@ -40,6 +44,7 @@ export default function PageOne() {
     );
   };
 
+  // should automatically set to monday? -> eventually current day
   useEffect(() => {
     setWeeklyAssignment(MOCK_WEEKLY_MENU);
     
@@ -48,8 +53,10 @@ export default function PageOne() {
     }
   }, []);
 
+  // map day to index
   const currentMeal = weeklyAssignment.find(m => m.day === selectedDay);
 
+  // regen button for ingredients page
   const handleRegeneration = () => {
     setIsRegenerating(true);
     // send req
@@ -57,6 +64,34 @@ export default function PageOne() {
       setIsRegenerating(false);
       // update the weekly state 
     }, 2500); // 2.5 seconds placeholder
+  };
+
+  // send message handler
+  const handleSendMessage = () => {
+    // if empty message ignores
+    if (chatInput.trim() === '') return;
+
+    // user message
+    const newMessage = { sender: 'User', text: chatInput };
+    setChatHistory([...chatHistory, newMessage]);
+
+    setChatInput('');
+    // automatically set to "feedback received" after user "sends" messgae
+    setTimeout(() => {
+      setChatHistory(prev => [...prev, { 
+        sender: 'System', 
+        text: "Feedback received." 
+      }]);
+    }, 1000);
+  };
+
+  // reset chat
+  const handleReset = () => {
+    setChatHistory([
+      { sender: 'System', text: "Yo" }
+    ]);
+    
+    setChatInput('');
   };
 
   return (
@@ -85,6 +120,7 @@ export default function PageOne() {
       </div>
 
       <main className={styles.main_content}>
+        {/* Main page showing basic meal stats */}
         {activeView === 'main' && currentMeal ? (
           <div className="meal-details-view">
           <header>
@@ -93,9 +129,8 @@ export default function PageOne() {
           </header>
           
           <section className={styles.stats_box}>
-              {/* not in mp obj yet */}
+              {/* not in meal plan ds yet */}
           </section>
-
           <section className={styles.quantity_section}>
             <label>Nr of students: </label>
             <input type="number" placeholder="q" />
@@ -127,13 +162,47 @@ export default function PageOne() {
             onClick={handleRegeneration}
             disabled={isRegenerating}
           >
-            {isRegenerating ? "Optimizing..." : "Regenerate Meal"}
+            {isRegenerating ? "Updating..." : "Regenerate Meal"}
 
           </button>
         </div>
 
+        // Chat interface
         ) : activeView === 'chat' ? (
-          <p>chat</p>
+
+          <div className={styles.chat_container}>
+          <header className={styles.chat_header}>
+            <h2>Chat</h2>
+            <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
+          </header>
+
+          <div className={styles.chat_window}>
+            {chatHistory.map((msg, index) => (
+            <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
+              <p><strong>{msg.sender}:</strong> {msg.text}</p>
+            </div>
+          ))}
+          </div>
+
+          {/* chat input */}
+          <footer className={styles.chat_input_area}>
+          
+          <input 
+            type="text" 
+            placeholder="Type meal feedback here..." 
+            className={styles.chat_input_mock} 
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()} 
+          />
+
+          {/* Send message */}
+          <button className={styles.send_btn} onClick={handleSendMessage}>
+            Send
+          </button>
+          </footer>
+          
+        </div>
 
         ) : activeView === 'calendar' ? (
 
@@ -146,15 +215,3 @@ export default function PageOne() {
     </div>
   );
 }
-
-{/* 
-
-<aside className="mini-calendar">
-  {weeklyAssignments.map((assignment) => (
-    <button key={assignment.date}>
-      {assignment.day} <br />
-      <small>{assignment.date}</small>
-    </button>
-  ))}
-</aside>
-*/}

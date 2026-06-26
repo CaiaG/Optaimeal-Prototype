@@ -1,0 +1,21 @@
+
+.sidebar_wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 250px; 
+  height: 100%;
+  border-right: 1px solid; 
+}
+
+.top_sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 10px;
+}
+
+.top_sidebar_btn {
+  text-align: left;
+  padding: 10px;
+  cursor: pointer;
+}
