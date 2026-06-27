@@ -46,11 +46,24 @@ export default function PageClient() {
 
   // should automatically set to monday? -> eventually current day
   useEffect(() => {
+
+    fetch('http://localhost:8000/api/client/menu/current')
+      .then(res => res.json())
+      .then(data => {
+        setWeeklyAssignment(data);
+        if (data.length > 0) {
+          // Default to Monday
+          setSelectedDay(data.day); 
+        }
+      })
+      .catch(err => console.error("Error fetching menu:", err));
+
+/*
     setWeeklyAssignment(MOCK_WEEKLY_MENU);
     
     if (MOCK_WEEKLY_MENU.length > 0) {
       setSelectedDay(MOCK_WEEKLY_MENU[0].day);
-    }
+    }*/
   }, []);
 
   // map day to index
