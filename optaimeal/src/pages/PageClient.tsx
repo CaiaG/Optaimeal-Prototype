@@ -13,15 +13,15 @@ interface MealPlan {
   ingredients: string[];
 }
 
-const MOCK_WEEKLY_MENU = [
-  { day: "Monday", date: "2026-06-22", meal_name: "Gobbeldy Gook", calories: 450, ingredients: ["aadffa", "onpasj", "oihohoi"] },
-  { day: "Tuesday", date: "2026-06-23", meal_name: "Codswallop", calories: 312, ingredients: ["ajkbc"] },
-  { day: "Wednesday", date: "2026-06-23", meal_name: "Balderdash", calories: 5, ingredients: ["ljdvh"] },
-  { day: "Thursday", date: "2026-06-23", meal_name: "Stinky Winky", calories: 17, ingredients: ["bndakv"] },
-  { day: "Friday", date: "2026-06-23", meal_name: "Bubble and Squeak", calories: 723, ingredients: ["bwg e"] },
-  { day: "Saturday", date: "2026-06-23", meal_name: "Upsy Daisy", calories: 222, ingredients: ["ph ei "] },
-  { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: ["oqhtn"] },
-];
+// const MOCK_WEEKLY_MENU = [
+//   { day: "Monday", date: "2026-06-22", meal_name: "Gobbeldy Gook", calories: 450, ingredients: ["aadffa", "onpasj", "oihohoi"] },
+//   { day: "Tuesday", date: "2026-06-23", meal_name: "Codswallop", calories: 312, ingredients: ["ajkbc"] },
+//   { day: "Wednesday", date: "2026-06-23", meal_name: "Balderdash", calories: 5, ingredients: ["ljdvh"] },
+//   { day: "Thursday", date: "2026-06-23", meal_name: "Stinky Winky", calories: 17, ingredients: ["bndakv"] },
+//   { day: "Friday", date: "2026-06-23", meal_name: "Bubble and Squeak", calories: 723, ingredients: ["bwg e"] },
+//   { day: "Saturday", date: "2026-06-23", meal_name: "Upsy Daisy", calories: 222, ingredients: ["ph ei "] },
+//   { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: ["oqhtn"] },
+// ];
 
 export default function PageClient() {
   
@@ -184,38 +184,38 @@ export default function PageClient() {
         ) : activeView === 'chat' ? (
 
           <div className={styles.chat_container}>
-          <header className={styles.chat_header}>
-            <h2>Chat</h2>
-            <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
-          </header>
+            <header className={styles.chat_header}>
+              <h2>Chat</h2>
+              <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
+            </header>
 
-          <div className={styles.chat_window}>
-            {chatHistory.map((msg, index) => (
-            <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
-              <p><strong>{msg.sender}:</strong> {msg.text}</p>
+            <div className={styles.chat_window}>
+              {chatHistory.map((msg, index) => (
+              <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
+                <p><strong>{msg.sender}:</strong> {msg.text}</p>
+              </div>
+            ))}
             </div>
-          ))}
+
+            {/* chat input */}
+            <footer className={styles.chat_input_area}>
+            
+            <input 
+              type="text" 
+              placeholder="Type meal feedback here..." 
+              className={styles.chat_input_mock} 
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()} 
+            />
+
+            {/* Send message */}
+            <button className={styles.send_btn} onClick={handleSendMessage}>
+              Send
+            </button>
+            </footer>
+            
           </div>
-
-          {/* chat input */}
-          <footer className={styles.chat_input_area}>
-          
-          <input 
-            type="text" 
-            placeholder="Type meal feedback here..." 
-            className={styles.chat_input_mock} 
-            value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()} 
-          />
-
-          {/* Send message */}
-          <button className={styles.send_btn} onClick={handleSendMessage}>
-            Send
-          </button>
-          </footer>
-          
-        </div>
 
         ) : activeView === 'calendar' ? (
 
