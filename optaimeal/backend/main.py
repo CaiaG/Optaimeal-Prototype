@@ -22,16 +22,20 @@ def read_root():
 @app.get("/api/client/menu/current")
 def get_current_menu():
     return [
-        { "day": "Monday", "date": "2026-06-22", "meal_name": "Gobbeldy Gook", "calories": 450, "ingredients": ["aadffa", "onpasj", "oihohoi"] },
-        { "day": "Tuesday", "date": "2026-06-23", "meal_name": "Codswallop", "calories": 312, "ingredients": ["ajkbc"] },
-        { "day": "Wednesday", "date": "2026-06-23", "meal_name": "Balderdash", "calories": 5, "ingredients": ["ljdvh"] },
-        { "day": "Thursday", "date": "2026-06-23", "meal_name": "Stinky Winky", "calories": 17, "ingredients": ["bndakv"] },
-        { "day": "Friday", "date": "2026-06-23", "meal_name": "Bubble and Squeak", "calories": 723, "ingredients": ["bwg e"] },
-        { "day": "Saturday", "date": "2026-06-23", "meal_name": "Upsy Daisy", "calories": 222, "ingredients": ["ph ei "] },
-        { "day": "Sunday", "date": "2026-06-23", "meal_name": "Mud", "calories": 821, "ingredients": ["oqhtn"] },
+        { "id": 0, "meal_name": "Gobbeldy Gook", "recipe_id": 101, "status": "Active", "calories": 450, "nutritional_score": 3.5, "ingredients": ["water", "beans", "maize"],
+            "assignment_date": "2026-07-01", "client_ids": [10], "estimated_cost": 12},
+        { "id": 1,"meal_name": "Codswallop","recipe_id": 102,"status": "Draft","calories": 520,"nutritional_score": 8.0,"ingredients": ["fish", "potatoes"],
+            "assignment_date": "2026-07-02","client_ids": [13, 14],"estimated_cost": 3},
+        { "id": 2,"meal_name": "Balderdash","recipe_id": 103,"status": "Archived","calories": 349,"nutritional_score": 2.0,"ingredients": ["rice", "lentils", "carrots"],
+            "assignment_date": "2026-07-03","client_ids": [14-19],"estimated_cost": 3 },
+        { "id": 3, "meal_name": "Stinky Winky","recipe_id": 104,"status": "Active","calories": 610,"nutritional_score": 9.5,"ingredients": ["beef", "onions", "tomatoes"],
+            "assignment_date": "2026-07-04","client_ids": [20-23],"estimated_cost": 99},
+        { "id": 4, "meal_name": "Bubble and Squeak","recipe_id": 105,"status": "Draft","calories": 983,"nutritional_score": 5.0,"ingredients": ["cabbage", "potatoes", "leftover greens"],
+            "assignment_date": "2026-07-05","client_ids": [15, 24-26],"estimated_cost": 193 }
     ]
 
 @app.get("POST /api/client/menu/adjust")
 def adjust_current_menu():
     return
 
+  

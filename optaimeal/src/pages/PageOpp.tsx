@@ -1,38 +1,101 @@
 import styles from './PageOpp.module.css';
 import { useState, useEffect } from 'react';
 
-interface MealPlan {
-  day: string;
-  date: string;
-  meal_name: string;
-  calories: number;
-  //meal_id: number;
-  //calories_per_serve: number;
-  //nutritional_score: number;
-  ingredients: string[];
+export type MealStatus = 'Draft' | 'Active' | 'Archived';
+
+
+// move to own class file soon
+export class MealPlan {
+  id: number;                 
+  meal_name: string;           
+  recipe_id: number | null;     
+  status: MealStatus;
+  calories: number;            
+  nutritional_score: number;  
+  ingredients: string[];       
+  assignment_date: string;    
+  client_ids: number[];        
+  estimated_cost: number;    
+
+  constructor() {
+    this.id = -1;
+    this.meal_name = "";
+    this.recipe_id = -1; 
+    this.status = "Draft";
+    this.calories = -1;
+    this.nutritional_score = -1;
+    this.ingredients = [];
+    this.assignment_date = "";
+    this.client_ids = [];
+    this.estimated_cost = -1;
+  }
 }
-
-const MealPlan = () => ({
-  day: "",
-  date: "",
-  meal_name: "",
-  calories: 0,
-  ingredients: []
-});
-
+export const MOCK_WEEKLY_MENU: MealPlan[] = [
+  {
+    id: 0,
+    meal_name: "Gobbeldy Gook",
+    recipe_id: 101,
+    status: "Active", // Must be "Draft" | "Active" | "Archived" [7, 8]
+    calories: 450,
+    nutritional_score: 3.5,
+    ingredients: ["water", "beans", "maize"], // string[] for multi-language names [5, 9]
+    assignment_date: "2026-07-01",
+    client_ids: [10], // number[] for Menu Sending feature [11, 12]
+    estimated_cost: 12
+  },
+  {
+    id: 1,
+    meal_name: "Codswallop",
+    recipe_id: 102,
+    status: "Draft",
+    calories: 520,
+    nutritional_score: 8.0,
+    ingredients: ["fish", "potatoes"],
+    assignment_date: "2026-07-02",
+    client_ids: [13, 14],
+    estimated_cost: 3
+  },
+  {
+    id: 2,
+    meal_name: "Balderdash",
+    recipe_id: 103,
+    status: "Archived",
+    calories: 349,
+    nutritional_score: 2.0,
+    ingredients: ["rice", "lentils", "carrots"],
+    assignment_date: "2026-07-03",
+    client_ids: [14-19],
+    estimated_cost: 3
+  },
+  {
+    id: 3,
+    meal_name: "Stinky Winky",
+    recipe_id: 104,
+    status: "Active",
+    calories: 610,
+    nutritional_score: 9.5,
+    ingredients: ["beef", "onions", "tomatoes"],
+    assignment_date: "2026-07-04",
+    client_ids: [20-23],
+    estimated_cost: 99
+  },
+  {
+    id: 4,
+    meal_name: "Bubble and Squeak",
+    recipe_id: 105,
+    status: "Draft",
+    calories: 983,
+    nutritional_score: 5.0,
+    ingredients: ["cabbage", "potatoes", "leftover greens"],
+    assignment_date: "2026-07-05",
+    client_ids: [15, 24-26],
+    estimated_cost: 193
+  }
+];
 
 export default function PageOpp() {
 
-  const MOCK_WEEKLY_MENU = [
-  { day: "Monday", date: "2026-06-22", meal_name: "Gobbeldy Gook", calories: 450, ingredients: ["aadffa", "onpasj", "oihohoi"] },
-  { day: "Tuesday", date: "2026-06-23", meal_name: "Codswallop", calories: 312, ingredients: ["ajkbc"] },
-  { day: "Wednesday", date: "2026-06-23", meal_name: "Balderdash", calories: 5, ingredients: ["ljdvh"] },
-  { day: "Thursday", date: "2026-06-23", meal_name: "Stinky Winky", calories: 17, ingredients: ["bndakv"] },
-  { day: "Friday", date: "2026-06-23", meal_name: "Bubble and Squeak", calories: 723, ingredients: ["bwg e"] },
-  { day: "Saturday", date: "2026-06-23", meal_name: "Upsy Daisy", calories: 222, ingredients: ["ph ei "] },
-  { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: ["oqhtn"] },
-];
-
+  
   const [activeView, setActiveView] = useState('home'); 
   const [addMode, setAddMode] = useState('button');
   const [chatInput, setChatInput] = useState('');
@@ -40,6 +103,7 @@ export default function PageOpp() {
   const [chatHistory, setChatHistory] = useState([
     { sender: 'System', text: "Start chat" }
   ]);
+  const [meals, setMeals] = useState<MealPlan[]>([]);
 
   const handleSendMessage = () => {
     // if empty message ignores
@@ -74,11 +138,12 @@ export default function PageOpp() {
   };
 
   const handleCreateNew = () => {
-    setSelectedMeal(MealPlan());
+    setSelectedMeal(new MealPlan());
     setActiveView('generate');
   };
 
   useEffect(() => {
+    setMeals(MOCK_WEEKLY_MENU);
   }, []);
 
   return (
@@ -95,7 +160,7 @@ export default function PageOpp() {
 
       <main className={styles.main_content}>
         {activeView === 'home' ? (
-          <div className={styles.home_wrapper}>
+        <div className={styles.home_wrapper}>
         
         <section className={styles.recent_meals_scroll}>         
 
@@ -136,7 +201,7 @@ export default function PageOpp() {
               style={{ cursor: 'pointer' }}
             >
               <h4>{meal.meal_name}</h4>
-              <p><small>{meal.date}</small></p>
+              <p><small>{meal.assignment_date}</small></p>
               <div className={styles.meal_stats_preview}>
                 <span>{meal.calories} kcal</span>
               </div>
@@ -187,7 +252,7 @@ export default function PageOpp() {
           {/* 1. Header & Navigation */}
           <header className={styles.generate_header}>
             <button className={styles.back_btn} onClick={() => setActiveView('home')}>
-              ← Back to Dashboard
+              Back to Dashboard
             </button>
             <h2>{selectedMeal ? `Editing: ${selectedMeal.meal_name}` : "Create New Scenario"}</h2>
           </header>
@@ -219,7 +284,7 @@ export default function PageOpp() {
                   </li>
                 ))}
               </ul>
-              <button className={styles.add_ing_btn}>+ Add Ingredient</button>
+              <button className={styles.add_ing_btn}>Add Ingredient</button>
             </section>
 
             {/* 3. LLM Scenario Tool & Metrics (The "Central Brain") */}
@@ -235,16 +300,17 @@ export default function PageOpp() {
                 </div>
               </div>
 
+              // add a send msg button lol
               <div className={styles.chatbot_interface}>
                 <div className={styles.chat_window}>
                   <p className={styles.system_msg}>
                     <strong>System:</strong> {selectedMeal 
-                      ? "I've loaded the scenario. How would you like to optimize it?" 
+                      ? "I've loaded the menu scenario. How would you like to optimize it?" 
                       : "Tell me the requirements for your new menu scenario."}
                   </p>
                 </div>
                 <div className={styles.chat_input_box}>
-                  <textarea placeholder="e.g., Swap beans for a local high-protein alternative..." />
+                  <textarea placeholder="type here..." />
                   <button className={styles.run_scenario_btn}>Run Optimization</button>
                 </div>
               </div>
@@ -261,7 +327,42 @@ export default function PageOpp() {
 
           <p>c</p>
         ) : activeView === 'saved' ? (
-          <p>d</p>
+          <div className={styles.saved_container}>
+            <header className={styles.saved_header}>
+              <button className={styles.back_btn} onClick={() => setActiveView('home')}>
+                Back to Dashboard
+              </button>
+              <h2>Saved Menu Drafts</h2>
+              <p>Manage your long-term meal plans here.</p>
+            </header>
+
+            <div className={styles.saved_list_controls}>
+              <input type="text" placeholder="Search saved meals..." className={styles.search_bar} />
+              <select className={styles.filter_dropdown}>
+                <option value="all">All States</option>
+                <option value="Draft">Drafts Only</option>
+                <option value="Active">Active Plans</option>
+              </select>
+            </div>
+
+            <div className={styles.saved_grid}>
+              {meals.map((meal) => (
+                <div key={meal.meal_name} className={styles.saved_item_card}>
+                  <div className={styles.card_header}>
+                    <h3>{meal.meal_name}</h3>
+                  </div>
+                  <p><strong>{meal.calories} kcal</strong> | {meal.assignment_date}</p>
+                  <button 
+                    className={styles.edit_btn} 
+                    onClick={() => handleEditMeal(meal)}
+                  >
+                    Open & Edit
+                  </button>
+                </div>
+              ))}
+            </div>
+  
+          </div>
         ) : (
           <p>e</p>
         )}

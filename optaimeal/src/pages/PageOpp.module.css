@@ -64,11 +64,21 @@
   flex: 0 0 250px;     
   height: 150px;
   background: white;
+  border: 1px solid #e0e0e0;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   padding: 20px;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
 }
 
+.add_new_card:hover,
+.meal_card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+  border-color: #3498db;
+}
 .chat_container {
   display: flex;
   flex-direction: column;
@@ -229,7 +239,7 @@
 }
 
 .metric_card {
-  background: #313233;
+  background: #3498db ;
   color: white;
   padding: 20px;
   border-radius: 12px;
@@ -311,4 +321,132 @@
   border-radius: 8px;
   cursor: pointer;
   font-weight: bold;
+}
+
+.saved_container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 20px;
+  animation: fadeIn 0.3s ease-in-out; /* Smooth transition when switching views */
+}
+
+.saved_header {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.saved_header h2 {
+  margin: 0;
+  color: #2c3e50;
+}
+
+/* 2. Controls Area (Search & Filters) */
+.saved_list_controls {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.search_bar {
+  flex: 1;
+  padding: 10px 15px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.filter_dropdown {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+}
+
+.saved_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  overflow-y: auto; 
+  padding-bottom: 30px;
+  padding-right: 10px;
+}
+
+.saved_item_card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.saved_item_card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+  border-color: #3498db;
+}
+
+.saved_item_info h3 {
+  margin: 0 0 10px 0;
+  color: #2c3e50;
+}
+
+.status_badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.status_badge:contains('Draft') {
+  background-color: #fef9e7;
+  color: #f1c40f;
+}
+
+.saved_item_actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.edit_btn {
+  flex: 2;
+  background: #3498db;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.edit_btn:hover {
+  background: #2980b9;
+}
+
+.delete_btn {
+  flex: 1;
+  background: #fdf2f2;
+  color: #e74c3c;
+  border: 1px solid #fadbd8;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }

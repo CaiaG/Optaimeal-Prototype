@@ -3,25 +3,34 @@ import { useState, useEffect } from 'react';
 
 // casing syntax is inconsistent...
 
-interface MealPlan {
-  day: string;
-  date: string;
-  meal_name: string;
-  //meal_id: number;
-  //calories_per_serve: number;
-  //nutritional_score: number;
-  ingredients: string[];
-}
+export type MealStatus = 'Draft' | 'Active' | 'Archived';
 
-// const MOCK_WEEKLY_MENU = [
-//   { day: "Monday", date: "2026-06-22", meal_name: "Gobbeldy Gook", calories: 450, ingredients: ["aadffa", "onpasj", "oihohoi"] },
-//   { day: "Tuesday", date: "2026-06-23", meal_name: "Codswallop", calories: 312, ingredients: ["ajkbc"] },
-//   { day: "Wednesday", date: "2026-06-23", meal_name: "Balderdash", calories: 5, ingredients: ["ljdvh"] },
-//   { day: "Thursday", date: "2026-06-23", meal_name: "Stinky Winky", calories: 17, ingredients: ["bndakv"] },
-//   { day: "Friday", date: "2026-06-23", meal_name: "Bubble and Squeak", calories: 723, ingredients: ["bwg e"] },
-//   { day: "Saturday", date: "2026-06-23", meal_name: "Upsy Daisy", calories: 222, ingredients: ["ph ei "] },
-//   { day: "Sunday", date: "2026-06-23", meal_name: "Mud", calories: 821, ingredients: ["oqhtn"] },
-// ];
+// move to own class file soon
+export class MealPlan {
+  id: number;                 
+  meal_name: string;           
+  recipe_id: number | null;     
+  status: MealStatus;
+  calories: number;            
+  nutritional_score: number;  
+  ingredients: string[];       
+  assignment_date: string;    
+  client_ids: number[];        
+  estimated_cost: number;    
+
+  constructor() {
+    this.id = -1;
+    this.meal_name = "";
+    this.recipe_id = -1; 
+    this.status = "Draft";
+    this.calories = -1;
+    this.nutritional_score = -1;
+    this.ingredients = [];
+    this.assignment_date = "";
+    this.client_ids = [];
+    this.estimated_cost = -1;
+  }
+}
 
 export default function PageClient() {
   
@@ -53,7 +62,7 @@ export default function PageClient() {
         setWeeklyAssignment(data);
         if (data.length > 0) {
           // Default to Monday
-          setSelectedDay(data.day); 
+          setSelectedDay(data.assignment_date);
         }
       })
       .catch(err => console.error("Error fetching menu:", err));
@@ -67,7 +76,7 @@ export default function PageClient() {
   }, []);
 
   // map day to index
-  const currentMeal = weeklyAssignment.find(m => m.day === selectedDay);
+  const currentMeal = weeklyAssignment.find(m => m.assignment_date === selectedDay);
 
   // regen button for ingredients page
   const handleRegeneration = () => {
@@ -122,11 +131,11 @@ export default function PageClient() {
         <aside className={styles.mini_calendar}>
          {weeklyAssignment.map((m) => (
             <button 
-              key={m.day} 
-              className={`${styles.mini_calendar_btns} ${selectedDay === m.day ? styles.active : ''}`}
-              onClick={() => setSelectedDay(m.day)}
+              key={m.assignment_date} 
+              className={`${styles.mini_calendar_btns} ${selectedDay === m.assignment_date ? styles.active : ''}`}
+              onClick={() => setSelectedDay(m.assignment_date)}
             >
-              {m.day}
+              {m.assignment_date}
             </button>
           ))}
         </aside>
@@ -137,7 +146,7 @@ export default function PageClient() {
         {activeView === 'main' && currentMeal ? (
           <div className="meal-details-view">
           <header>
-            <h1>{currentMeal.day} - {currentMeal.date}</h1>
+            {new Date(currentMeal.assignment_date).toLocaleDateString('en-US', { weekday: 'long' })} - {currentMeal.assignment_date}
             <h2>{currentMeal.meal_name}</h2>
           </header>
           
