@@ -167,6 +167,11 @@ export default function PageOpp() {
     { id: 102, name: "Random High" }
   ];
 
+  const MOCK_DRAFTS = [
+    { id: 1, name: "Baddabing" },
+    { id: 2, name: "Badaboom" },
+  ];
+
   
   type CalendarAssignments = Record<number, Record<string, string>>;
 
@@ -182,20 +187,33 @@ export default function PageOpp() {
     calendarDate.getMonth(), 
     1
   ).getDay();
+  const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
 
-  const handleAssignToDate = (day: number): void => {
+  const handleSelectSavedMeal = (day: number, meal: any): void => {
     if (selectedClientId === null) return;
 
     const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
-    const randomMeal = "random meal";
 
     setCalendarAssignments((prev: CalendarAssignments) => ({
       ...prev,
       [selectedClientId]: {
         ...(prev[selectedClientId] || {}),
-        [dateKey]: randomMeal,
+        [dateKey]: meal.name, 
       },
     }));
+    
+    setActiveMenuDate(null);
+  };
+
+  
+
+  const isDateLocked = (day: number): boolean => {
+    const cellDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), day);
+    const today = new Date();
+    
+    today.setHours(0, 0, 0, 0);
+    
+    return cellDate <= today;
   };
 
   return (
@@ -460,15 +478,44 @@ export default function PageOpp() {
                 const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
                 const currentClientAssignments = selectedClientId ? calendarAssignments[selectedClientId] : null;
                 const assignedMeal = currentClientAssignments ? currentClientAssignments[dateKey] : null;
+                const locked = isDateLocked(day); 
 
                 return (
-                  <div key={day} className={styles.calendar_cell} onClick={() => handleAssignToDate(day)}>
-                    <span className={styles.cell_date}>{day}</span>
+                  <div 
+                    key={day} 
+                    className={`${styles.calendar_cell} ${locked ? styles.locked : ''}`}
+                    onClick={() => !locked && setActiveMenuDate(dateKey)} 
+                  >                    
+                    <div className={styles.cell_header}>
+                      <span className={styles.cell_date}>{day}</span>
+                      <span className={locked ? styles.lock_icon : styles.add_icon}>
+                        {locked ? '🔒' : '+'}
+                      </span>
+                    </div>
                     {assignedMeal && (
                       <div className={styles.assignment_tag}>
                         {assignedMeal}
                       </div>
                     )}
+                    {!locked && activeMenuDate === dateKey && (
+                      <div className={styles.dummy_menu_popup}>
+                        <header className={styles.popup_header}>
+                          <span>Saved Meals</span>
+                          <button onClick={() => setActiveMenuDate(null)}>x</button>
+                        </header>
+                        <div className={styles.saved_meal_list}>
+                          {MOCK_DRAFTS.map((meal) => (
+                            <div 
+                              key={meal.id} 
+                              className={styles.dummy_menu_item}
+                              onClick={() => handleSelectSavedMeal(day, meal)}
+                            >
+                              {meal.name}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}                    
                   </div>
                 );
               })}
