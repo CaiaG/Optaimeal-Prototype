@@ -43,6 +43,7 @@ export default function PageClient() {
   const [chatHistory, setChatHistory] = useState([
   { sender: 'System', text: "Start chat" }
 ]);
+  const currentMeal = weeklyAssignment.find(m => m.assignment_date === selectedDay);
 
   // ingredient checklist toggle
   const toggleIngredient = (ingredientName: string) => {
@@ -76,7 +77,6 @@ export default function PageClient() {
   }, []);
 
   // map day to index
-  const currentMeal = weeklyAssignment.find(m => m.assignment_date === selectedDay);
 
   // regen button for ingredients page
   const handleRegeneration = () => {

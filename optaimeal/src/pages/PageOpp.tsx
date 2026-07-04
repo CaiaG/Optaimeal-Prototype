@@ -104,6 +104,8 @@ export default function PageOpp() {
     { sender: 'System', text: "Start chat" }
   ]);
   const [meals, setMeals] = useState<MealPlan[]>([]);
+  const [ingredientInput, setIngredientInput] = useState('');
+  const [scenarioPrompt, setScenarioPrompt] = useState('');
 
   const handleSendMessage = () => {
     // if empty message ignores
@@ -142,9 +144,59 @@ export default function PageOpp() {
     setActiveView('generate');
   };
 
+  const handleAddIngredient = (name: string) => {
+    if (selectedMeal) {
+      const updatedIngredients = [...selectedMeal.ingredients, name];
+      setSelectedMeal({ ...selectedMeal, ingredients: updatedIngredients });
+    }
+  };
+
+  const handleRemoveIngredient = (index: number) => {
+    if (selectedMeal) {
+      const updatedIngredients = selectedMeal.ingredients.filter((_, i) => i !== index);
+      setSelectedMeal({ ...selectedMeal, ingredients: updatedIngredients });
+    }
+  };
+
   useEffect(() => {
     setMeals(MOCK_WEEKLY_MENU);
   }, []);
+
+   const MOCK_CLIENTS = [
+    { id: 101, name: "Random Elementary" },
+    { id: 102, name: "Random High" }
+  ];
+
+  
+  type CalendarAssignments = Record<number, Record<string, string>>;
+
+  const [calendarDate, setCalendarDate] = useState<Date>(new Date());
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(MOCK_CLIENTS[0]?.id || null);
+  const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
+
+  const daysInMonth = (month: number, year: number): number => 
+    new Date(year, month + 1, 0).getDate();
+
+  const startDayOfMonth = new Date(
+    calendarDate.getFullYear(), 
+    calendarDate.getMonth(), 
+    1
+  ).getDay();
+
+  const handleAssignToDate = (day: number): void => {
+    if (selectedClientId === null) return;
+
+    const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
+    const randomMeal = "random meal";
+
+    setCalendarAssignments((prev: CalendarAssignments) => ({
+      ...prev,
+      [selectedClientId]: {
+        ...(prev[selectedClientId] || {}),
+        [dateKey]: randomMeal,
+      },
+    }));
+  };
 
   return (
     <div className={styles.opp_container}>
@@ -218,30 +270,30 @@ export default function PageOpp() {
 
             <div className={styles.chat_window}>
               {chatHistory.map((msg, index) => (
-              <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
-                <p><strong>{msg.sender}:</strong> {msg.text}</p>
-              </div>
-            ))}
+                <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
+                  <p><strong>{msg.sender}:</strong> {msg.text}</p>
+                </div>
+              ))}
             </div>
 
-            {/* chat input */}
             <footer className={styles.chat_input_area}>
-            
-            <input 
-              type="text" 
-              placeholder="Type meal feedback here..." 
-              className={styles.chat_input_mock} 
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()} 
-            />
+              <textarea 
+                placeholder="Type requirements (e.g., 'sustainable menu for 500 students')..." 
+                className={styles.chat_input_mock} 
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }} 
+              />
 
-            {/* Send message */}
-            <button className={styles.send_btn} onClick={handleSendMessage}>
-              Send
-            </button>
+              <div className={styles.chat_actions}>
+                
+              </div>
             </footer>
-            
           </div>
         </section>
       </div>
@@ -276,18 +328,48 @@ export default function PageOpp() {
                 />
               </div>
 
-              <h3>Ingredients</h3>
-              <ul className={styles.ingredients_list}>
-                {(selectedMeal?.ingredients || ["No ingredients yet"]).map((ing, i) => (
-                  <li key={i} className={styles.ingredient_item}>
-                    {ing} <button className={styles.remove_ing}>×</button>
-                  </li>
-                ))}
-              </ul>
-              <button className={styles.add_ing_btn}>Add Ingredient</button>
+              <section className={styles.ingredients_section}>
+                <h3>Ingredients Checklist</h3>
+                <ul className={styles.ingredients_list}>
+                  {selectedMeal?.ingredients.map((ing, i) => (
+                    <li key={i} className={styles.ingredient_item}>
+                      <span>{ing}</span>
+                      <button 
+                        className={styles.remove_ing} 
+                        onClick={() => handleRemoveIngredient(i)}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className={styles.add_ingredient_container}>
+                  <input 
+                    type="text" 
+                    placeholder="Add new ingredient..." 
+                    value={ingredientInput}
+                    onChange={(e) => setIngredientInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAddIngredient(ingredientInput);
+                        setIngredientInput(''); 
+                      }
+                    }} 
+                  />
+                  <button 
+                    className={styles.add_ing_btn} 
+                    onClick={() => {
+                      handleAddIngredient(ingredientInput);
+                      setIngredientInput(''); 
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+              </section>
             </section>
 
-            {/* 3. LLM Scenario Tool & Metrics (The "Central Brain") */}
             <section className={styles.llm_tool_section}>
               <div className={styles.metrics_dashboard}>
                 <div className={styles.metric_card}>
@@ -300,17 +382,33 @@ export default function PageOpp() {
                 </div>
               </div>
 
-              // add a send msg button lol
+              <header className={styles.chat_header}>
+                <h2>Chat</h2>
+                <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
+              </header>
+
               <div className={styles.chatbot_interface}>
                 <div className={styles.chat_window}>
-                  <p className={styles.system_msg}>
-                    <strong>System:</strong> {selectedMeal 
-                      ? "I've loaded the menu scenario. How would you like to optimize it?" 
-                      : "Tell me the requirements for your new menu scenario."}
-                  </p>
+                  {chatHistory.map((msg, index) => (
+                    <p key={index} className={msg.sender === 'System' ? styles.system_msg : styles.user_msg}>
+                      <strong>{msg.sender}:</strong> {msg.text}
+                    </p>
+                  ))}
                 </div>
+
                 <div className={styles.chat_input_box}>
-                  <textarea placeholder="type here..." />
+                  <textarea 
+                    placeholder="Type requirements here..." 
+                    value={chatInput} 
+                    onChange={(e) => setChatInput(e.target.value)} 
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                  />
+
                   <button className={styles.run_scenario_btn}>Run Optimization</button>
                 </div>
               </div>
@@ -325,7 +423,63 @@ export default function PageOpp() {
 
         ) : activeView === 'calendar' ? (
 
-          <p>c</p>
+           <section className={styles.calendar_view_area}>
+            <header className={styles.calendar_header}>
+              <div className={styles.client_picker}>
+                <label>Assigning for: </label>
+                <select 
+                  value={selectedClientId || ''} 
+                  onChange={(e) => setSelectedClientId(Number(e.target.value))}
+                >
+                  {MOCK_CLIENTS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              
+              <div className={styles.month_nav}>
+                <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+                  &lt; Prev
+                </button>
+                <h2>{calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h2>
+                <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+                  Next &gt;
+                </button>
+              </div>
+            </header>
+
+            <div className={styles.calendar_grid}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <div key={d} className={styles.day_label}>{d}</div>
+              ))}
+              
+              {[...Array(startDayOfMonth)].map((_, i) => (
+                <div key={`pad-${i}`} className={styles.day_empty} />
+              ))}
+
+              {[...Array(daysInMonth(calendarDate.getMonth(), calendarDate.getFullYear()))].map((_, i) => {
+                const day = i + 1;
+                const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
+                const currentClientAssignments = selectedClientId ? calendarAssignments[selectedClientId] : null;
+                const assignedMeal = currentClientAssignments ? currentClientAssignments[dateKey] : null;
+
+                return (
+                  <div key={day} className={styles.calendar_cell} onClick={() => handleAssignToDate(day)}>
+                    <span className={styles.cell_date}>{day}</span>
+                    {assignedMeal && (
+                      <div className={styles.assignment_tag}>
+                        {assignedMeal}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <footer className={styles.calendar_actions}>
+              <button className={styles.push_active_btn} onClick={() => alert("Assignments Pushed to Active Status")}>
+                Push Weekly Assignments to School
+              </button>
+            </footer>
+          </section>
         ) : activeView === 'saved' ? (
           <div className={styles.saved_container}>
             <header className={styles.saved_header}>

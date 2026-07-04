@@ -28,6 +28,7 @@ class Ingredient(Base):
     location = Column(String)
     season = Column(String)
     availability = Column(String)
+    # maybe a list of possible substitutes?
 
 class MealAssignments(Base):
     __tablename__ = "meal_assignments"
