@@ -1,35 +1,7 @@
 import styles from './PageOpp.module.css';
 import { useState, useEffect } from 'react';
+import { createEmptyMeal, type MealPlan } from './types/mealplan';
 
-export type MealStatus = 'Draft' | 'Active' | 'Archived';
-
-
-// move to own class file soon
-export class MealPlan {
-  id: number;                 
-  meal_name: string;           
-  recipe_id: number | null;     
-  status: MealStatus;
-  calories: number;            
-  nutritional_score: number;  
-  ingredients: string[];       
-  assignment_date: string;    
-  client_ids: number[];        
-  estimated_cost: number;    
-
-  constructor() {
-    this.id = -1;
-    this.meal_name = "";
-    this.recipe_id = -1; 
-    this.status = "Draft";
-    this.calories = -1;
-    this.nutritional_score = -1;
-    this.ingredients = [];
-    this.assignment_date = "";
-    this.client_ids = [];
-    this.estimated_cost = -1;
-  }
-}
 export const MOCK_WEEKLY_MENU: MealPlan[] = [
   {
     id: 0,
@@ -64,7 +36,7 @@ export const MOCK_WEEKLY_MENU: MealPlan[] = [
     nutritional_score: 2.0,
     ingredients: ["rice", "lentils", "carrots"],
     assignment_date: "2026-07-03",
-    client_ids: [14-19],
+    client_ids: [14, 19],
     estimated_cost: 3
   },
   {
@@ -76,7 +48,7 @@ export const MOCK_WEEKLY_MENU: MealPlan[] = [
     nutritional_score: 9.5,
     ingredients: ["beef", "onions", "tomatoes"],
     assignment_date: "2026-07-04",
-    client_ids: [20-23],
+    client_ids: [20, 23],
     estimated_cost: 99
   },
   {
@@ -88,24 +60,24 @@ export const MOCK_WEEKLY_MENU: MealPlan[] = [
     nutritional_score: 5.0,
     ingredients: ["cabbage", "potatoes", "leftover greens"],
     assignment_date: "2026-07-05",
-    client_ids: [15, 24-26],
+    client_ids: [15, 24, 26],
     estimated_cost: 193
   }
 ];
 
 export default function PageOpp() {
-
   
   const [activeView, setActiveView] = useState('home'); 
   const [addMode, setAddMode] = useState('button');
   const [chatInput, setChatInput] = useState('');
-  const [selectedMeal, setSelectedMeal] = useState<MealPlan>();
+  const [selectedMeal, setSelectedMeal] = useState<MealPlan | null>(null);
   const [chatHistory, setChatHistory] = useState([
     { sender: 'System', text: "Start chat" }
   ]);
   const [meals, setMeals] = useState<MealPlan[]>([]);
   const [ingredientInput, setIngredientInput] = useState('');
-  const [scenarioPrompt, setScenarioPrompt] = useState('');
+  
+
 
   const handleSendMessage = () => {
     // if empty message ignores
@@ -116,7 +88,6 @@ export default function PageOpp() {
     setChatHistory([...chatHistory, newMessage]);
 
     setChatInput('');
-    // automatically set to "feedback received" after user "sends" messgae
     setTimeout(() => {
       setChatHistory(prev => [...prev, { 
         sender: 'System', 
@@ -140,7 +111,7 @@ export default function PageOpp() {
   };
 
   const handleCreateNew = () => {
-    setSelectedMeal(new MealPlan());
+    setSelectedMeal(createEmptyMeal());
     setActiveView('generate');
   };
 
@@ -157,6 +128,18 @@ export default function PageOpp() {
       setSelectedMeal({ ...selectedMeal, ingredients: updatedIngredients });
     }
   };
+
+  const handleNavigation = (view: string, meal: MealPlan | null = null) => {
+    if (view === 'generate' && !meal) {
+      setSelectedMeal(createEmptyMeal());
+    } else {
+      setSelectedMeal(meal);
+    }
+    
+    setActiveView(view);
+  };
+
+  
 
   useEffect(() => {
     setMeals(MOCK_WEEKLY_MENU);
@@ -205,8 +188,6 @@ export default function PageOpp() {
     setActiveMenuDate(null);
   };
 
-  
-
   const isDateLocked = (day: number): boolean => {
     const cellDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), day);
     const today = new Date();
@@ -215,6 +196,7 @@ export default function PageOpp() {
     
     return cellDate <= today;
   };
+
 
   return (
     <div className={styles.opp_container}>
@@ -229,96 +211,110 @@ export default function PageOpp() {
       </aside>
 
       <main className={styles.main_content}>
-        {activeView === 'home' ? (
-        <div className={styles.home_wrapper}>
-        
-        <section className={styles.recent_meals_scroll}>         
+        {activeView === 'home' && <HomeView onSelect={handleNavigation} />}
+        {activeView === 'generate' && <GenerateView meal={selectedMeal} onBack={() => setActiveView('home')} />}
+        {activeView === 'calendar' && <CalendarView />}
+        {activeView === 'saved' && <SavedView onEdit={(m) => handleNavigation('generate', m)} />}
+      </main>
+    </div>
+  );
 
-          {addMode === 'button' ? (
-            <div className={styles.add_new_card} onClick={() => setAddMode('options')}>
-              <span>+ Add New Meal</span>
-            </div>
-          ) : (
-            <div className={styles.add_options_card}>
-              <button 
-                className={styles.option_btn} 
-                onClick={handleCreateNew}
-              >
-                Create from Scratch
-              </button>
-              <button 
-                className={styles.option_btn} 
-                onClick={() => { 
-                      setActiveView('saved'); 
-                      setAddMode('button'); 
-                    }}               >
-              Load from Database
-              </button>
-              <button className={styles.cancel_link} 
-                onClick={() => setAddMode('button')}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
+    
+  function HomeView({ onSelect }: { onSelect: (v: string, m: MealPlan | null) => void }) {
+    return (
+      <div className={styles.home_wrapper}>
+          
+          <section className={styles.recent_meals_scroll}>         
 
-          {MOCK_WEEKLY_MENU.map((meal, index) => (
-            <div key={index} className={styles.meal_card}          
-              onClick={() => {
-                    setSelectedMeal(meal); 
-                    setActiveView('generate');
-                  }}               
-              style={{ cursor: 'pointer' }}
-            >
-              <h4>{meal.meal_name}</h4>
-              <p><small>{meal.assignment_date}</small></p>
-              <div className={styles.meal_stats_preview}>
-                <span>{meal.calories} kcal</span>
+            {addMode === 'button' ? (
+              <div className={styles.add_new_card} onClick={() => setAddMode('options')}>
+                <span>+ Add New Meal</span>
               </div>
-            </div>
-          ))}            
-        </section>
+            ) : (
+              <div className={styles.add_options_card}>
+                <button 
+                  className={styles.option_btn} 
+                  onClick={handleCreateNew}
+                >
+                  Create from Scratch
+                </button>
+                <button 
+                  className={styles.option_btn} 
+                  onClick={() => { 
+                        setActiveView('saved'); 
+                        setAddMode('button'); 
+                      }}               >
+                Load from Database
+                </button>
+                <button className={styles.cancel_link} 
+                  onClick={() => setAddMode('button')}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
 
-        <section className={styles.scenario_tool_area}>
-          <div className={styles.chat_container}>
-            <header className={styles.chat_header}>
-              <h2>Chat</h2>
-              <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
-            </header>
-
-            <div className={styles.chat_window}>
-              {chatHistory.map((msg, index) => (
-                <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
-                  <p><strong>{msg.sender}:</strong> {msg.text}</p>
+            {MOCK_WEEKLY_MENU.map((meal, index) => (
+              <div key={index} className={styles.meal_card}          
+                onClick={() => {
+                      setSelectedMeal(meal); 
+                      setActiveView('generate');
+                    }}               
+                style={{ cursor: 'pointer' }}
+              >
+                <h4>{meal.meal_name}</h4>
+                <p><small>{meal.assignment_date}</small></p>
+                <div className={styles.meal_stats_preview}>
+                  <span>{meal.calories} kcal</span>
                 </div>
-              ))}
-            </div>
-
-            <footer className={styles.chat_input_area}>
-              <textarea 
-                placeholder="Type requirements (e.g., 'sustainable menu for 500 students')..." 
-                className={styles.chat_input_mock} 
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }
-                }} 
-              />
-
-              <div className={styles.chat_actions}>
-                
               </div>
-            </footer>
-          </div>
-        </section>
-      </div>
+            ))}            
+          </section>
 
-        // Chat interface
-        ) : activeView === 'generate' ? (
-          <div className={styles.generate_container}>
+          <section className={styles.scenario_tool_area}>
+            <div className={styles.chat_container}>
+              <header className={styles.chat_header}>
+                <h2>Chat</h2>
+                <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
+              </header>
+
+              <div className={styles.chat_window}>
+                {chatHistory.map((msg, index) => (
+                  <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
+                    <p><strong>{msg.sender}:</strong> {msg.text}</p>
+                  </div>
+                ))}
+              </div>
+
+              <footer className={styles.chat_input_area}>
+                <textarea 
+                  placeholder="Type requirements (e.g., 'sustainable menu for 500 students')..." 
+                  className={styles.chat_input_mock} 
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }} 
+                />
+
+                <div className={styles.chat_actions}>
+                  
+                </div>
+              </footer>
+            </div>
+          </section>
+        </div>
+    );
+  }
+
+  function GenerateView({ meal, onBack }: { meal: MealPlan | null, onBack: () => void }) {
+    const [data, setData] = useState<MealPlan>(meal || createEmptyMeal());
+
+    return (
+      <div className={styles.generate_container}>
           {/* 1. Header & Navigation */}
           <header className={styles.generate_header}>
             <button className={styles.back_btn} onClick={() => setActiveView('home')}>
@@ -344,6 +340,17 @@ export default function PageOpp() {
                   type="number" 
                   defaultValue={selectedMeal?.calories || ""} 
                 />
+              </div>
+
+              <div className={styles.metrics_dashboard}>
+                <div className={styles.metric_card}>
+                  <span>Nutritional Score</span>
+                  <strong>{selectedMeal ? selectedMeal.nutritional_score: "--"}</strong>
+                </div>
+                <div className={styles.metric_card}>
+                  <span>Est. Cost per Serving</span>
+                  <strong>{selectedMeal ? selectedMeal.calories : "--"}</strong>
+                </div>
               </div>
 
               <section className={styles.ingredients_section}>
@@ -387,18 +394,8 @@ export default function PageOpp() {
                 </div>
               </section>
             </section>
-
+            
             <section className={styles.llm_tool_section}>
-              <div className={styles.metrics_dashboard}>
-                <div className={styles.metric_card}>
-                  <span>Nutritional Score</span>
-                  <strong>{selectedMeal ? selectedMeal.calories: "--"}</strong>
-                </div>
-                <div className={styles.metric_card}>
-                  <span>Est. Cost per Serving</span>
-                  <strong>{selectedMeal ? selectedMeal.calories : "--"}</strong>
-                </div>
-              </div>
 
               <header className={styles.chat_header}>
                 <h2>Chat</h2>
@@ -438,136 +435,136 @@ export default function PageOpp() {
             </section>
           </div>
         </div>
+    );
+  }
 
-        ) : activeView === 'calendar' ? (
-
-           <section className={styles.calendar_view_area}>
-            <header className={styles.calendar_header}>
-              <div className={styles.client_picker}>
-                <label>Assigning for: </label>
-                <select 
-                  value={selectedClientId || ''} 
-                  onChange={(e) => setSelectedClientId(Number(e.target.value))}
-                >
-                  {MOCK_CLIENTS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              
-              <div className={styles.month_nav}>
-                <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
-                  &lt; Prev
-                </button>
-                <h2>{calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h2>
-                <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
-                  Next &gt;
-                </button>
-              </div>
-            </header>
-
-            <div className={styles.calendar_grid}>
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-                <div key={d} className={styles.day_label}>{d}</div>
-              ))}
-              
-              {[...Array(startDayOfMonth)].map((_, i) => (
-                <div key={`pad-${i}`} className={styles.day_empty} />
-              ))}
-
-              {[...Array(daysInMonth(calendarDate.getMonth(), calendarDate.getFullYear()))].map((_, i) => {
-                const day = i + 1;
-                const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
-                const currentClientAssignments = selectedClientId ? calendarAssignments[selectedClientId] : null;
-                const assignedMeal = currentClientAssignments ? currentClientAssignments[dateKey] : null;
-                const locked = isDateLocked(day); 
-
-                return (
-                  <div 
-                    key={day} 
-                    className={`${styles.calendar_cell} ${locked ? styles.locked : ''}`}
-                    onClick={() => !locked && setActiveMenuDate(dateKey)} 
-                  >                    
-                    <div className={styles.cell_header}>
-                      <span className={styles.cell_date}>{day}</span>
-                      <span className={locked ? styles.lock_icon : styles.add_icon}>
-                        {locked ? '🔒' : '+'}
-                      </span>
-                    </div>
-                    {assignedMeal && (
-                      <div className={styles.assignment_tag}>
-                        {assignedMeal}
-                      </div>
-                    )}
-                    {!locked && activeMenuDate === dateKey && (
-                      <div className={styles.dummy_menu_popup}>
-                        <header className={styles.popup_header}>
-                          <span>Saved Meals</span>
-                          <button onClick={() => setActiveMenuDate(null)}>x</button>
-                        </header>
-                        <div className={styles.saved_meal_list}>
-                          {MOCK_DRAFTS.map((meal) => (
-                            <div 
-                              key={meal.id} 
-                              className={styles.dummy_menu_item}
-                              onClick={() => handleSelectSavedMeal(day, meal)}
-                            >
-                              {meal.name}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}                    
-                  </div>
-                );
-              })}
-            </div>
-
-            <footer className={styles.calendar_actions}>
-              <button className={styles.push_active_btn} onClick={() => alert("Assignments Pushed to Active Status")}>
-                Push Weekly Assignments to School
-              </button>
-            </footer>
-          </section>
-        ) : activeView === 'saved' ? (
-          <div className={styles.saved_container}>
-            <header className={styles.saved_header}>
-              <button className={styles.back_btn} onClick={() => setActiveView('home')}>
-                Back to Dashboard
-              </button>
-              <h2>Saved Menu Drafts</h2>
-              <p>Manage your long-term meal plans here.</p>
-            </header>
-
-            <div className={styles.saved_list_controls}>
-              <input type="text" placeholder="Search saved meals..." className={styles.search_bar} />
-              <select className={styles.filter_dropdown}>
-                <option value="all">All States</option>
-                <option value="Draft">Drafts Only</option>
-                <option value="Active">Active Plans</option>
-              </select>
-            </div>
-
-            <div className={styles.saved_grid}>
-              {meals.map((meal) => (
-                <div key={meal.meal_name} className={styles.saved_item_card}>
-                  <div className={styles.card_header}>
-                    <h3>{meal.meal_name}</h3>
-                  </div>
-                  <p><strong>{meal.calories} kcal</strong> | {meal.assignment_date}</p>
-                  <button 
-                    className={styles.edit_btn} 
-                    onClick={() => handleEditMeal(meal)}
-                  >
-                    Open & Edit
-                  </button>
-                </div>
-              ))}
-            </div>
-  
+  function CalendarView() {
+    return (
+      <section className={styles.calendar_view_area}>
+        <header className={styles.calendar_header}>
+          <div className={styles.client_picker}>
+            <label>Assigning for: </label>
+            <select 
+              value={selectedClientId || ''} 
+              onChange={(e) => setSelectedClientId(Number(e.target.value))}
+            >
+              {MOCK_CLIENTS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
           </div>
-        ) : (
-          <p>e</p>
-        )}
-      </main>
-    </div>
-  );
+              
+          <div className={styles.month_nav}>
+            <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+              &lt; Prev
+            </button>
+            <h2>{calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h2>
+            <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+              Next &gt;
+            </button>
+          </div>
+        </header>
+
+        <div className={styles.calendar_grid}>
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+            <div key={d} className={styles.day_label}>{d}</div>
+          ))}
+              
+          {[...Array(startDayOfMonth)].map((_, i) => (
+            <div key={`pad-${i}`} className={styles.day_empty} />
+        ))}
+
+          {[...Array(daysInMonth(calendarDate.getMonth(), calendarDate.getFullYear()))].map((_, i) => {
+            const day = i + 1;
+            const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
+            const currentClientAssignments = selectedClientId ? calendarAssignments[selectedClientId] : null;
+            const assignedMeal = currentClientAssignments ? currentClientAssignments[dateKey] : null;
+            const locked = isDateLocked(day); 
+
+            return (
+              <div 
+                key={day} 
+                className={`${styles.calendar_cell} ${locked ? styles.locked : ''}`}
+                onClick={() => !locked && setActiveMenuDate(dateKey)} 
+              >                    
+                <div className={styles.cell_header}>
+                  <span className={styles.cell_date}>{day}</span>
+                  <span className={locked ? styles.lock_icon : styles.add_icon}>
+                  {locked ? '🔒' : '+'}
+                  </span>
+                </div>
+                {assignedMeal && (
+                  <div className={styles.assignment_tag}>
+                    {assignedMeal}
+                  </div>
+                )}                  {!locked && activeMenuDate === dateKey && (
+                  <div className={styles.dummy_menu_popup}>
+                    <header className={styles.popup_header}>
+                      <span>Saved Meals</span>
+                    <button onClick={() => setActiveMenuDate(null)}>x</button>
+                    </header>
+                    <div className={styles.saved_meal_list}>
+                      {MOCK_DRAFTS.map((meal) => (
+                        <div 
+                          key={meal.id} 
+                          className={styles.dummy_menu_item}
+                          onClick={() => handleSelectSavedMeal(day, meal)}
+                        >
+                          {meal.name}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}                    
+              </div>
+            );
+          })}
+        </div>
+
+        <footer className={styles.calendar_actions}>
+          <button className={styles.push_active_btn} onClick={() => alert("Assignments Pushed to Active Status")}>
+            Push Weekly Assignments to School
+          </button>
+        </footer>      
+      </section>       
+    );
+  }
+
+  function SavedView({ onEdit }: { onEdit: (m: MealPlan) => void }) {
+    return (
+      <div className={styles.saved_container}>
+        <header className={styles.saved_header}>
+          <button className={styles.back_btn} onClick={() => setActiveView('home')}>
+            Back to Dashboard
+          </button>
+          <h2>Saved Menu Drafts</h2>
+          <p>Manage your long-term meal plans here.</p>
+        </header>
+
+        <div className={styles.saved_list_controls}>
+          <input type="text" placeholder="Search saved meals..." className={styles.search_bar} />
+          <select className={styles.filter_dropdown}>
+            <option value="all">All States</option>
+            <option value="Draft">Drafts Only</option>
+            <option value="Active">Active Plans</option>
+          </select>
+        </div>
+
+        <div className={styles.saved_grid}>
+          {meals.map((meal) => (
+            <div key={meal.meal_name} className={styles.saved_item_card}>
+              <div className={styles.card_header}>
+                <h3>{meal.meal_name}</h3>
+              </div>
+              <p><strong>{meal.calories} kcal</strong> | {meal.assignment_date}</p>
+              <button 
+                className={styles.edit_btn} 
+                onClick={() => handleEditMeal(meal)}
+              >
+                Open & Edit
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 }
