@@ -5,6 +5,13 @@
   flex-direction: column;
   padding: 30px;
   overflow-y: auto;    
+  
+
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .opp_container {
@@ -42,6 +49,9 @@
   gap: 30px;
   width: 100%;
   padding: 20px;
+  animation: fadeIn 0.3s ease-in-out; 
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  border-radius: 12px;
 }
 
 .recent_meals_scroll {
@@ -81,10 +91,12 @@
 .chat_container {
   display: flex;
   flex-direction: column;
-  height: 400px;
+  min-height: 500px;
   border: 1px solid #ddd;
   background: #f9f9f9;
   border-radius: 8px;
+    border-radius: 12px;
+
 }
 
 .chat_header {
@@ -159,6 +171,11 @@
   flex-direction: column;
   height: 100%;
   gap: 20px;
+  animation: fadeIn 0.3s ease-in-out; 
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  padding: 30px;
+    border-radius: 12px;
+
 }
 
 .generate_header {
@@ -328,7 +345,11 @@
   flex-direction: column;
   height: 100%;
   gap: 20px;
-  animation: fadeIn 0.3s ease-in-out; /* Smooth transition when switching views */
+  animation: fadeIn 0.3s ease-in-out; 
+  padding: 30px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  border-radius: 12px;
+
 }
 
 .saved_header {
@@ -446,15 +467,12 @@
   cursor: pointer;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+
 
 .operator_container {
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: 30px;
   background-color: #f4f4f4; 
   min-height: 100vh;
   font-family: 'Inter', sans-serif;
@@ -464,8 +482,10 @@
 .calendar_view_area {
   background: white;
   border-radius: 12px;
-  padding: 24px;
+  padding: 30px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  animation: fadeIn 0.3s ease-in-out; 
+  
 }
 
 .calendar_header {
@@ -579,4 +599,26 @@
   border-radius: 8px;
   display: flex;
   flex-direction: column;
+}
+
+.modal_overlay {
+  position: fixed; 
+  left: 0;
+  width: 100vw;   
+  height: 100vh;   
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center; 
+  align-items: center;    
+  z-index: 9999;         
+}
+
+.modal_content {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  width: 400px;
+  max-width: 90%;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  color: #333; 
 }

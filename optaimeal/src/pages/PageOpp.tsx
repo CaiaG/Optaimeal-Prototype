@@ -223,7 +223,6 @@ export default function PageOpp() {
   function HomeView({ onSelect }: { onSelect: (v: string, m: MealPlan | null) => void }) {
     return (
       <div className={styles.home_wrapper}>
-          
           <section className={styles.recent_meals_scroll}>         
 
             {addMode === 'button' ? (
@@ -312,7 +311,7 @@ export default function PageOpp() {
 
   function GenerateView({ meal, onBack }: { meal: MealPlan | null, onBack: () => void }) {
     const [data, setData] = useState<MealPlan>(meal || createEmptyMeal());
-
+    const [isModalOpen, setIsModalOpen] = useState(false);
     return (
       <div className={styles.generate_container}>
           {/* 1. Header & Navigation */}
@@ -430,10 +429,23 @@ export default function PageOpp() {
 
               <div className={styles.action_footer}>
                 <button className={styles.save_draft_btn}>Save as Draft</button>
-                <button className={styles.assign_btn}>Assign to Client</button>
+                <button 
+                  className={styles.assign_btn}
+                  onClick={() => setIsModalOpen(true)}
+                >Assign to Client</button>
+                
               </div>
             </section>
           </div>
+
+          {isModalOpen && (
+            <div className={styles.modal_overlay} onClick={() => setIsModalOpen(false)}>
+              <div className={styles.modal_content} onClick={(e) => e.stopPropagation()}>
+                <h3>Assign Meal to Client</h3>
+                <button onClick={() => setIsModalOpen(false)}>Close</button>
+              </div>
+            </div>
+          )}
         </div>
     );
   }
