@@ -4,11 +4,11 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import date, datetime
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
-from .database import Base 
+from database import Base 
 
-from typing import Dict, Any
+from typing import Dict, Any, List, Union
 
-from . import models, database 
+import models, database 
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -20,6 +20,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# how to generate meal id
 
 meals = [
         { "id": 0, "meal_name": "Gobbeldy Gook", "recipe_id": 101, "status": "Active", "calories": 450, "nutritional_score": 3.5, "ingredients": ["water", "beans", "maize"],
@@ -47,12 +48,41 @@ def get_current_menu():
 # get meal details given meal id
 @app.get("/api/meal/{meal_id}")
 def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
-    meal = db.query(models.Meal).filter(models.Meal.id == meal_id).first()
+    meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
     
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
     
     return meal
+
+class MealCreate(BaseModel):
+    meal_name: str
+    calories_per_serving: float
+    nutritional_score: float
+    ingredients: Union[List[str], str]
+    status: str = "Draft"
+    assignment_date: str
+
+
+# Update meal details given meal id
+@app.put("/api/meal/{meal_id}")
+def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(database.get_db)):
+    existing_meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
+    
+    if not existing_meal:
+        raise HTTPException(status_code=404, detail="Meal not found")
+    
+    existing_meal.meal_name = meal_data.meal_name
+    existing_meal.status = meal_data.status
+    existing_meal.ingredients = ", ".join(meal_data.ingredients) if isinstance(meal_data.ingredients, list) else meal_data.ingredients
+    existing_meal.calories_per_serving = meal_data.calories_per_serving
+    existing_meal.nutritional_score = meal_data.nutritional_score
+    existing_meal.assignment_date = meal_data.assignment_date
+
+    db.commit()
+    db.refresh(existing_meal)
+    
+    return existing_meal
 
 class MenuAssignmentRequest(BaseModel):
     meal_id: int
@@ -108,6 +138,24 @@ def get_all_ingredients(db: Session = Depends(database.get_db)):
         
     return ingredients
 
+@app.post("/api/meals")
+def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
+    new_meal = models.Meal(
+        meal_name=meal_data.meal_name,
+        calories_per_serving=meal_data.calories_per_serving,
+        nutritional_score=meal_data.nutritional_score,
+        ingredients=", ".join(meal_data.ingredients),
+        status=meal_data.status,
+        assignment_date=meal_data.assignment_date
+    )
+    
+    db.add(new_meal)
+    
+    db.commit()
+    
+    db.refresh(new_meal)
+    
+    return new_meal
 
 # client routes
 
@@ -154,6 +202,7 @@ def adjust_client_menu(request: MealAdjustmentRequest, db: Session = Depends(dat
     db.commit()
     return {"message": "Adjustments successfully reported for analytics."}
 
+# commit to either recipe_name or meal_name
 # Request alternative, optimized recipes based on reported constraints.
 @app.get("/api/client/menu/optimize/{meal_id}")
 def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
@@ -170,7 +219,7 @@ def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
 
     optimized_suggestion = {
         "original_meal_id": meal.id,
-        "new_recipe_name": f"Optimized {meal.recipe_name}",
+        "new_recipe_name": f"Optimized {meal.meal_name}",
         "status": "Active",
         "adjustments_applied": latest_log.client_changes,
         "nutritional_targets_met": True,

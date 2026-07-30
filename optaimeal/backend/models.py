@@ -6,9 +6,14 @@ class Meal(Base):
 
     meal_id = Column(Integer, primary_key=True, index=True)
     meal_name = Column(String, index=True)
-    # status = Column(String, default="Draft")
+    status = Column(String, default="Draft")
+    ingredients = Column(String);
     calories_per_serving = Column(Float)
     nutritional_score = Column(Float)
+    assignment_date= Column(String)
+
+
+
 
 class MealIngredients(Base):
     __tablename__ = "meal_ingredients"

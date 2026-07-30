@@ -204,8 +204,8 @@ export default function PageClient() {
                       <h3>{currentMeal?.meal_name}</h3>
     
                       <div className={styles.meta_info}>
-                        <p><strong>Calories:</strong> {currentMeal?.calories || 'N/A'}</p>
-                        <p><strong>Estimated Cost:</strong> {currentMeal?.estimated_cost|| 'Medium'}</p>
+                        <p><strong>Calories:</strong> {currentMeal?.calories_per_serving || 'N/A'}</p>
+                        <p><strong>Estimated Cost:</strong> {"n/a"}</p>
                       </div>
 
                       <div className={styles.ingredients_list}>

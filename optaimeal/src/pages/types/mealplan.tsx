@@ -1,27 +1,24 @@
 export type MealStatus = 'Draft' | 'Active' | 'Archived';
 
 export interface MealPlan {
-  id: number;
+  meal_id: number | null;
   meal_name: string;
-  recipe_id: number | null;
+  // recipe_id: number | null;
   status: MealStatus;
-  calories: number;
+  calories_per_serving: number;
   nutritional_score: number;
   ingredients: string[];
   assignment_date: string;
-  client_ids: number[];
-  estimated_cost: number;
 }
 
+
 export const createEmptyMeal = (): MealPlan => ({
-  id: -1,
+  meal_id: null,
   meal_name: "",
-  recipe_id: null,
+  // recipe_id: null,
   status: "Draft",
-  calories: 0,
+  calories_per_serving: 0,
   nutritional_score: 0,
   ingredients: [],
-  assignment_date: new Date().toISOString().split('T')[0],
-  client_ids: [],
-  estimated_cost: 0,
+  assignment_date: ""
 });
