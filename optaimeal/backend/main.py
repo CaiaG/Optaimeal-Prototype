@@ -41,10 +41,6 @@ def read_root():
 
 # operator routes
 
-@app.get("/api/client/menu/current")
-def get_current_menu():
-    return meals
-
 # get meal details given meal id
 @app.get("/api/meal/{meal_id}")
 def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
@@ -74,7 +70,11 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
     
     existing_meal.meal_name = meal_data.meal_name
     existing_meal.status = meal_data.status
-    existing_meal.ingredients = ", ".join(meal_data.ingredients) if isinstance(meal_data.ingredients, list) else meal_data.ingredients
+    existing_meal.ingredients = (
+        ", ".join(meal_data.ingredients) 
+        if isinstance(meal_data.ingredients, list) 
+        else meal_data.ingredients
+    )
     existing_meal.calories_per_serving = meal_data.calories_per_serving
     existing_meal.nutritional_score = meal_data.nutritional_score
     existing_meal.assignment_date = meal_data.assignment_date
@@ -92,12 +92,16 @@ class MenuAssignmentRequest(BaseModel):
 # Send a specific menu to a client (using client ID)
 @app.post("/api/operator/menu/assign")
 def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(database.get_db)):
-    meal = db.query(models.Meal).filter(models.Meal.id == request.meal_id).first()
-
+    meal = db.query(models.Meal).filter(models.Meal.meal_id == request.meal_id).first()
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
+
     if meal.status != "Draft":
         raise HTTPException(status_code=400, detail="Only draft menus can be assigned")
+
+    client = db.query(models.Client).filter(models.Client.client_id == request.client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found in database")
 
     new_assignment = models.MealAssignment(
         client_id=request.client_id,
@@ -107,9 +111,9 @@ def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(
     db.add(new_assignment)
 
     meal.status = "Active"
-    
     db.commit()
-    return {"message": f"Meal {request.meal_id} successfully assigned to client {request.client_id}"}
+    
+    return {"message": f"Meal '{meal.meal_name}' successfully assigned to '{client.client_name}'"}
 
 class ExchangeLog(Base):
     __tablename__ = "exchange_logs"
@@ -138,13 +142,29 @@ def get_all_ingredients(db: Session = Depends(database.get_db)):
         
     return ingredients
 
-@app.post("/api/meals")
+# retrieve list of all meals on backend
+@app.get("/api/meals")
+def get_all_meals(db: Session = Depends(database.get_db)):
+    meals = db.query(models.Meal).all()
+    if not meals:
+            return {"message": "No meals found in the database."}
+            
+    return meals
+
+# post new meal without a given id
+@app.post("/api/meal")
 def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
+    formatted_ingredients = (
+        ", ".join(meal_data.ingredients) 
+        if isinstance(meal_data.ingredients, list) 
+        else meal_data.ingredients
+    )
+
     new_meal = models.Meal(
         meal_name=meal_data.meal_name,
         calories_per_serving=meal_data.calories_per_serving,
         nutritional_score=meal_data.nutritional_score,
-        ingredients=", ".join(meal_data.ingredients),
+        ingredients=formatted_ingredients,
         status=meal_data.status,
         assignment_date=meal_data.assignment_date
     )
@@ -169,7 +189,7 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
     if not assignment:
         raise HTTPException(status_code=404, detail="No menu assigned to this client.")
     meal = db.query(models.Meal).filter(
-        models.Meal.id == assignment.meal_id,
+        models.Meal.meal_id == assignment.meal_id,
         models.Meal.status == "Active"
     ).first()
 
@@ -185,7 +205,7 @@ class MealAdjustmentRequest(BaseModel):
 #  Send real-time changes (e.g., ingredient availability, quantity adjustments) back to the backend.
 @app.post("/api/client/menu/adjust")
 def adjust_client_menu(request: MealAdjustmentRequest, db: Session = Depends(database.get_db)):
-    meal = db.query(models.Meal).filter(models.Meal.id == request.meal_id).first()
+    meal = db.query(models.Meal).filter(models.Meal.meal_id == request.meal_id).first()
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
 
@@ -227,3 +247,37 @@ def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
     }
 
     return optimized_suggestion
+
+class ClientCreate(BaseModel):
+    client_name: str
+    location: str
+    population: int
+
+class ClientResponse(BaseModel):
+    client_id: int
+    client_name: str
+    location: str
+    population: int
+
+    class Config:
+        from_attributes = True
+
+# Fetch all clients (used for dropdowns/modals in frontend)
+@app.get("/api/clients", response_model=List[ClientResponse])
+def get_all_clients(db: Session = Depends(database.get_db)):
+    clients = db.query(models.Client).all()
+    return clients
+
+
+# Create a new client
+@app.post("/api/clients", response_model=ClientResponse)
+def create_client(client_data: ClientCreate, db: Session = Depends(database.get_db)):
+    new_client = models.Client(
+        client_name=client_data.client_name,
+        location=client_data.location,
+        population=client_data.population
+    )
+    db.add(new_client)
+    db.commit()
+    db.refresh(new_client)
+    return new_client

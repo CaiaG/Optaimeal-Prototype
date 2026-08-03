@@ -69,6 +69,16 @@
   border-radius: 12px;
   scrollbar-width: thin;
   scrollbar-color: #3498db #f0f0f0;
+  user-select: none;
+}
+
+
+.recent_meals_scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.recent_meals_scroll:active {
+  cursor: grabbing;
 }
 
 .add_new_card, 
@@ -83,6 +93,8 @@
   justify-content: space-between;
   transition: all 0.2s ease;
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+  flex-shrink: 0;
+
 }
 
 .add_new_card:hover,

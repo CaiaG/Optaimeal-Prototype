@@ -13,8 +13,6 @@ class Meal(Base):
     assignment_date= Column(String)
 
 
-
-
 class MealIngredients(Base):
     __tablename__ = "meal_ingredients"
 
@@ -35,7 +33,8 @@ class Ingredient(Base):
     availability = Column(String)
     # maybe a list of possible substitutes?
 
-class MealAssignments(Base):
+# client id & assignment date pairs should be unique
+class MealAssignment(Base):
     __tablename__ = "meal_assignments"
 
     id = Column(Integer, primary_key=True, index=True)

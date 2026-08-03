@@ -1,32 +1,64 @@
-import React, { useState, useEffect } from 'react';
-import styles from './PageOpp.module.css'; // Assuming your CSS module import
+import React, { useState, useEffect, useRef } from 'react';
+import styles from './PageOpp.module.css';
 import { createEmptyMeal, type MealPlan } from './types/mealplan';
 
 // --- Types & Interfaces ---
+export interface Client {
+  client_id: number;
+  name: string;
+}
+
+interface HomeViewProps {
+  meals: MealPlan[];
+  onNavigate: (view: string, meal?: MealPlan | null) => void;
+  chatInput: string;
+  setChatInput: React.Dispatch<React.SetStateAction<string>>;
+  chatHistory: Array<{ sender: string; text: string }>;
+  onSendMessage: () => void;
+  onResetChat: () => void;
+}
+
+interface GenerateViewProps {
+  meal: MealPlan | null;
+  onUpdateMeal: (meal: MealPlan) => void;
+  onBack: () => void;
+  chatInput: string;
+  setChatInput: React.Dispatch<React.SetStateAction<string>>;
+  chatHistory: Array<{ sender: string; text: string }>;
+  onSendMessage: () => void;
+  onResetChat: () => void;
+  onSaveDraft: () => Promise<void>;
+  onAssignToClient: (clientId: number | null) => void;
+  savedMealId: number | null;
+}
+
+interface CalendarViewProps {
+  meals: MealPlan[];
+}
+
+interface SavedViewProps {
+  meals: MealPlan[];
+  onEdit: (meal: MealPlan) => void;
+  onBack: () => void;
+}
 
 // --- Mock Data & Helpers ---
 export const MOCK_WEEKLY_MENU: MealPlan[] = [
-  { meal_id: 0, meal_name: "Gobbeldy Gook", status: "Active", calories_per_serving: 450, nutritional_score: 3.5, ingredients: ["water", "beans", "maize"], assignment_date : ""},
-  { meal_id: 1, meal_name: "Codswallop",  status: "Draft", calories_per_serving: 520, nutritional_score: 8.0, ingredients: ["fish", "potatoes"],assignment_date : ""},
-  { meal_id: 2, meal_name: "Balderdash",  status: "Archived", calories_per_serving: 349, nutritional_score: 2.0, ingredients: ["rice", "lentils", "carrots"],assignment_date : ""},
-  { meal_id: 3, meal_name: "Stinky Winky", status: "Active", calories_per_serving: 610, nutritional_score: 9.5, ingredients: ["beef", "onions", "tomatoes"],assignment_date : ""},
-  { meal_id: 4, meal_name: "Bubble and Squeak", status: "Draft", calories_per_serving: 983, nutritional_score: 5.0, ingredients: ["cabbage", "potatoes", "leftover greens"],assignment_date : ""}
+  { meal_id: 0, meal_name: "Gobbeldy Gook", status: "Active", calories_per_serving: 450, nutritional_score: 3.5, ingredients: ["water", "beans", "maize"], assignment_date: "" },
+  { meal_id: 1, meal_name: "Codswallop", status: "Draft", calories_per_serving: 520, nutritional_score: 8.0, ingredients: ["fish", "potatoes"], assignment_date: "" },
+  { meal_id: 2, meal_name: "Balderdash", status: "Archived", calories_per_serving: 349, nutritional_score: 2.0, ingredients: ["rice", "lentils", "carrots"], assignment_date: "" },
+  { meal_id: 3, meal_name: "Stinky Winky", status: "Active", calories_per_serving: 610, nutritional_score: 9.5, ingredients: ["beef", "onions", "tomatoes"], assignment_date: "" },
+  { meal_id: 4, meal_name: "Bubble and Squeak", status: "Draft", calories_per_serving: 983, nutritional_score: 5.0, ingredients: ["cabbage", "potatoes", "leftover greens"], assignment_date: "" }
 ];
 
-const MOCK_CLIENTS = [
-  { id: 101, name: "Random Elementary" },
-  { id: 102, name: "Random High" }
-];
-
-
-const MOCK_DRAFTS = [
-  { id: 1, name: "Baddabing" },
-  { id: 2, name: "Badaboom" },
+const MOCK_CLIENTS: Client[] = [
+  { client_id: 1, name: "Random Elementary" },
+  { client_id: 2, name: "Random High" }
 ];
 
 // --- Main Application Component ---
 export default function PageOpp() {
-  const [activeView, setActiveView] = useState('home'); 
+  const [activeView, setActiveView] = useState('home');
   const [selectedMeal, setSelectedMeal] = useState<MealPlan | null>(null);
   const [meals, setMeals] = useState<MealPlan[]>([]);
   
@@ -35,8 +67,6 @@ export default function PageOpp() {
   const [chatHistory, setChatHistory] = useState([
     { sender: 'System', text: "Start chat" }
   ]);
-
-  // Shared Form/Draft State
 
   const [savedMealId, setSavedMealId] = useState<number | null>(null);
 
@@ -57,7 +87,7 @@ export default function PageOpp() {
   const handleSendMessage = () => {
     if (chatInput.trim() === '') return;
     const newMessage = { sender: 'User', text: chatInput };
-    setChatHistory([...chatHistory, newMessage]);
+    setChatHistory((prev) => [...prev, newMessage]);
     setChatInput('');
     setTimeout(() => {
       setChatHistory(prev => [...prev, { sender: 'System', text: "Feedback received." }]);
@@ -66,19 +96,17 @@ export default function PageOpp() {
 
   const handleResetChat = () => {
     if (!selectedMeal) return;
-
     setChatHistory([{ sender: 'System', text: "Yo" }]);
     setChatInput('');
   };
 
-  const handleSaveDraft = async () => {
+  const handleSaveDraft = async (): Promise<number | null> => {
     if (!selectedMeal) return null;
 
-    const isExistingMeal = !!selectedMeal.meal_id; 
-
-    const endpoint = selectedMeal?.meal_id 
-      ? "http://localhost:8000/api/meal/" + selectedMeal.meal_id 
-      : "http://localhost:8000/api/meals";
+    const isExistingMeal = Boolean(selectedMeal.meal_id); 
+    const endpoint = isExistingMeal 
+      ? `http://localhost:8000/api/meal/${selectedMeal.meal_id}` 
+      : "http://localhost:8000/api/meal";
 
     const method = isExistingMeal ? 'PUT' : 'POST';
 
@@ -93,67 +121,97 @@ export default function PageOpp() {
 
     try {
       const response = await fetch(endpoint, {
-        method: method,
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      
-      const data = await response.json();
-      const assignedId = data.meal_id || selectedMeal.meal_id || Date.now();
-      
-      setSavedMealId(assignedId);
-      setSelectedMeal({ ...selectedMeal, meal_id: assignedId }); 
 
-      if (response.ok) {
-        alert("Draft saved successfully!");
-        return assignedId;
+      if (!response.ok) {
+        throw new Error(`Server responded with status ${response.status}`);
       }
+
+      const savedMeal = await response.json();
+      
+      const assignedId = savedMeal.meal_id; 
+
+      setSavedMealId(assignedId);
+      setSelectedMeal((prev) => (prev ? { ...prev, meal_id: assignedId } : null));
+
+      alert("Draft saved successfully!");
       return assignedId;
     } catch (e) {
       console.error("Save failed:", e);
-      alert("Failed to save draft to the database. Please try again.");
+      alert("Failed to save draft to the database. Please check server connectivity.");
+      return null; // Return null so calling functions know the save failed
     }
   };
 
   const handleSaveAndUpdateFrontend = async () => {
     const savedId = await handleSaveDraft();
-    
-    if (selectedMeal) {
-      setMeals(prevMeals => {
-        const mealToSave: MealPlan = { 
-          ...selectedMeal, 
-          meal_id: savedId, 
-          status: 'Draft' as const
-        };
+    if (!savedId || !selectedMeal) return;
 
-        const existingIndex = prevMeals.findIndex(m => m.meal_id === mealToSave.meal_id);
-        if (existingIndex >= 0) {
-          const updatedMeals = [...prevMeals];
-          updatedMeals[existingIndex] = mealToSave;
-          return updatedMeals;
-        }
-        
-        return [...prevMeals, mealToSave];
-      });
-    }
+    setMeals(prevMeals => {
+      const mealToSave: MealPlan = { 
+        ...selectedMeal, 
+        meal_id: savedId, 
+        status: 'Draft'
+      };
+
+      const existingIndex = prevMeals.findIndex(m => m.meal_id === mealToSave.meal_id);
+      if (existingIndex >= 0) {
+        const updatedMeals = [...prevMeals];
+        updatedMeals[existingIndex] = mealToSave;
+        return updatedMeals;
+      }
+      
+      return [...prevMeals, mealToSave];
+    });
   };
 
   const handleAssignToClient = async (clientId: number | null) => {
+    if (!clientId) {
+      alert("Please select a valid client.");
+      return;
+    }
+
+    let currentMealId = savedMealId;
+    
+    if (!currentMealId) {
+      currentMealId = await handleSaveDraft();
+      if (!currentMealId) {
+        alert("Failed to save draft. Please save the meal before assigning.");
+        return;
+      }
+    }
+
+    const payload = {
+      meal_id: currentMealId,
+      client_id: clientId,
+      assignment_date: new Date().toISOString().split('T')[0]
+    };
+
     try {
       const response = await fetch('http://localhost:8000/api/operator/menu/assign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          meal_id: savedMealId, 
-          client_id: clientId,
-          assignment_date: new Date().toISOString().split('T')[0] 
-        })
+        body: JSON.stringify(payload)
       });
-      if (response.ok) {
-        alert("Meal assigned successfully!");
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to assign meal.");
       }
-    } catch (e) {
-      alert("Meal assigned successfully (Mocked)!");
+
+      alert(data.message || "Meal assigned successfully!");
+
+      if (selectedMeal) {
+        setSelectedMeal({ ...selectedMeal, status: "Active" });
+      }
+
+    } catch (e: any) {
+      console.error("Assignment error:", e);
+      alert(`Assignment failed: ${e.message}`);
     }
   };
 
@@ -196,7 +254,7 @@ export default function PageOpp() {
           />
         )}
         {activeView === 'calendar' && (
-          <CalendarView />
+          <CalendarView meals={meals} />
         )}
         {activeView === 'saved' && (
           <SavedView 
@@ -210,47 +268,108 @@ export default function PageOpp() {
   );
 }
 
-// --- Extracted Components ---
+// --- Sub-Components ---
+
 
 function HomeView({ 
   meals, onNavigate, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat 
-}: any) {
+}: HomeViewProps) {
   const [addMode, setAddMode] = useState('button');
 
+  const scrollRef = useRef<HTMLElement>(null);
+  const isMouseDown = useRef(false);
+  const startX = useRef(0);
+  const scrollLeft = useRef(0);
+  const isDragging = useRef(false);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!scrollRef.current) return;
+    isMouseDown.current = true;
+    startX.current = e.pageX - scrollRef.current.offsetLeft;
+    scrollLeft.current = scrollRef.current.scrollLeft;
+    isDragging.current = false; 
+  };
+
+  const handleMouseLeave = () => {
+    isMouseDown.current = false;
+  };
+
+  const handleMouseUp = () => {
+    isMouseDown.current = false;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isMouseDown.current || !scrollRef.current) return;
+    e.preventDefault();
+    
+    const x = e.pageX - scrollRef.current.offsetLeft;
+    const walk = (x - startX.current) * 1.5; 
+
+    if (Math.abs(x - startX.current) > 5) {
+      isDragging.current = true;
+    }
+
+    scrollRef.current.scrollLeft = scrollLeft.current - walk;
+  };
+
+  const handleCardClick = (meal: MealPlan) => {
+    // Don't navigate if user was dragging
+    if (isDragging.current) return;
+    onNavigate('generate', meal);
+  };
   return (
     <div className={`${styles.home_wrapper} ${styles.animate_mount}`}>
-      <section className={styles.recent_meals_scroll}>         
+      <section 
+        ref={scrollRef}
+        className={styles.recent_meals_scroll}
+        onMouseDown={handleMouseDown}
+        onMouseLeave={handleMouseLeave}
+        onMouseUp={handleMouseUp}
+        onMouseMove={handleMouseMove}
+      >        
         {addMode === 'button' ? (
-          <div className={styles.add_new_card} onClick={() => setAddMode('options')}>
+          <div 
+            className={styles.add_new_card} 
+            onClick={() => !isDragging.current && setAddMode('options')}
+          >
             <span>+ Add New Meal</span>
           </div>
         ) : (
           <div className={styles.add_options_card}>
             <button 
               className={styles.option_btn} 
-              onClick={() => onNavigate('generate', createEmptyMeal())}
+              onClick={() => !isDragging.current && onNavigate('generate', createEmptyMeal())}
             >
               Create from Scratch
             </button>
             <button 
               className={styles.option_btn} 
-              onClick={() => { onNavigate('saved', null); setAddMode('button'); }}              
+              onClick={() => { 
+                if (!isDragging.current) {
+                  onNavigate('saved', null); 
+                  setAddMode('button');
+                }
+              }}              
             >
               Load from Database
             </button>
-            <button className={styles.cancel_link} onClick={() => setAddMode('button')}>
+            <button 
+              className={styles.cancel_link} 
+              onClick={() => !isDragging.current && setAddMode('button')}
+            >
               Cancel
             </button>
           </div>
         )}
 
-        {meals.map((meal: MealPlan, index: number) => (
-          <div key={index} className={styles.meal_card}          
-            onClick={() => onNavigate('generate', meal)}              
-            style={{ cursor: 'pointer' }}
+        {meals.map((meal: MealPlan) => (
+          <div 
+            key={meal.meal_id} 
+            className={styles.meal_card}          
+            onClick={() => handleCardClick(meal)}              
           >
             <h4>{meal.meal_name}</h4>
-            <p><small>{"n/a"}</small></p>
+            <p><small>{meal.status}</small></p>
             <div className={styles.meal_stats_preview}>
               <span>{meal.calories_per_serving} kcal</span>
             </div>
@@ -266,7 +385,7 @@ function HomeView({
           </header>
 
           <div className={styles.chat_window}>
-            {chatHistory.map((msg: any, index: number) => (
+            {chatHistory.map((msg, index) => (
               <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
                 <p><strong>{msg.sender}:</strong> {msg.text}</p>
               </div>
@@ -296,13 +415,13 @@ function HomeView({
 
 function GenerateView({ 
   meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId 
-}: any) {
+}: GenerateViewProps) {
   const [ingredientInput, setIngredientInput] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const handleAddIngredient = (name: string) => {
-    if (name.trim()) {
-      const currentIngredients = meal?.ingredients || [];
+    if (name.trim() && meal) {
+      const currentIngredients = meal.ingredients || [];
       onUpdateMeal({ 
         ...meal, 
         ingredients: [...currentIngredients, name.trim()] 
@@ -315,7 +434,7 @@ function GenerateView({
     if (meal && meal.ingredients) {
       onUpdateMeal({ 
         ...meal, 
-        ingredients: meal.ingredients.filter((_: string, i: number) => i !== index) 
+        ingredients: meal.ingredients.filter((_, i) => i !== index) 
       });
     }
   };
@@ -323,6 +442,20 @@ function GenerateView({
   const handleAssignSubmit = (clientId: number | null) => {
     onAssignToClient(clientId);
     setIsModalOpen(false);
+  };
+
+  const rawIngredients = meal?.ingredients as unknown;
+
+  const ingredientList: string[] = Array.isArray(rawIngredients)
+    ? rawIngredients
+    : typeof rawIngredients === 'string'
+    ? rawIngredients.split(',').map((item: string) => item.trim()).filter(Boolean)
+    : [];
+
+  const triggerAddIngredient = () => {
+    if (!ingredientInput.trim()) return;
+    handleAddIngredient(ingredientInput.trim());
+    setIngredientInput("");
   };
 
   return (
@@ -340,41 +473,44 @@ function GenerateView({
             <label>Recipe Name</label>
             <input 
               type="text" 
-              value={meal?.meal_name || ""}  
-              onChange={(e) => onUpdateMeal({ ...meal, meal_name: e.target.value })}
+              value={meal?.meal_name ?? ""}  
+              onChange={(e) => meal && onUpdateMeal({ ...meal, meal_name: e.target.value })}
               placeholder="e.g., Lentil Stew" 
             />
           </div>
           <div className={styles.input_group}>
-            <label>Target Calories</label>
+            <label>Target Calories (per serving)</label>
             <input 
               type="number" 
-              value={meal?.calories || ""} 
-              onChange={(e) => onUpdateMeal({ ...meal, calories: Number(e.target.value) })}
+              value={meal?.calories_per_serving ?? ""} 
+              onChange={(e) => meal && onUpdateMeal({ ...meal, calories_per_serving: Number(e.target.value) })}
             />
           </div>
 
           <div className={styles.metrics_dashboard}>
             <div className={styles.metric_card}>
               <span>Nutritional Score</span>
-              <strong>{meal ? meal.nutritional_score : "--"}</strong>
+              <strong>{meal?.nutritional_score ?? "--"}</strong>
             </div>
             <div className={styles.metric_card}>
-              <span>Est. Cost per Serving</span>
-              <strong>{meal ? meal.estimated_cost : "--"}</strong>
+              <span>Status</span>
+              <strong>{meal?.status ?? "--"}</strong>
             </div>
           </div>
 
           <section className={styles.ingredients_section}>
             <h3>Ingredients List</h3>
             <ul className={styles.ingredients_list}>
-              {meal?.ingredients.map((ing: string, i: number) => (
-                <li key={i} className={styles.ingredient_item}>
+              {ingredientList.map((ing: string, i: number) => (
+                <li key={`${ing}-${i}`} className={styles.ingredient_item}>
                   <span>{ing}</span>
                   <button 
+                    type="button"
                     className={styles.remove_ing} 
                     onClick={() => handleRemoveIngredient(i)}
-                  >×</button>
+                  >
+                    ×
+                  </button>
                 </li>
               ))}
             </ul>
@@ -386,13 +522,19 @@ function GenerateView({
                 value={ingredientInput}
                 onChange={(e) => setIngredientInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleAddIngredient(ingredientInput);
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    triggerAddIngredient();
+                  }
                 }} 
               />
               <button 
+                type="button"
                 className={styles.add_ing_btn} 
-                onClick={() => handleAddIngredient(ingredientInput)}
-              >+</button>
+                onClick={triggerAddIngredient}
+              >
+                +
+              </button>
             </div>
           </section>
         </section>
@@ -424,23 +566,27 @@ function GenerateView({
                   }
                 }}
               />
-              <button className={styles.run_scenario_btn}>Run Optimization</button>
+              <button 
+                type="button"
+                className={styles.run_scenario_btn} 
+                onClick={onSendMessage}
+              >
+                Run Optimization
+              </button>
             </div>
           </div>
 
           <div className={styles.action_footer}>
-            <button 
-              className={styles.save_draft_btn} 
-              onClick={onSaveDraft}
-            >
+            <button className={styles.save_draft_btn} onClick={onSaveDraft}>
               Save
             </button>
 
             <button 
+              type="button"
               className={styles.assign_btn}
               onClick={() => setIsModalOpen(true)}
-              disabled={!savedMealId}
-              style={{ opacity: savedMealId ? 1 : 0.5, cursor: savedMealId ? 'pointer' : 'not-allowed' }}
+              disabled={!meal}
+              style={{ opacity: meal ? 1 : 0.5, cursor: meal ? 'pointer' : 'not-allowed' }}
             >
               Assign to Client
             </button>
@@ -452,7 +598,21 @@ function GenerateView({
         <div className={styles.modal_overlay} onClick={() => setIsModalOpen(false)}>
           <div className={styles.modal_content} onClick={(e) => e.stopPropagation()}>
             <h3>Assign Meal to Client</h3>
-            <button onClick={() => handleAssignSubmit(101)}>Assign to Random Elementary</button>
+            
+            {!savedMealId && (
+              <p style={{ color: '#d9534f', fontSize: '0.85rem', marginBottom: '1rem' }}>
+                Assigning will automatically save this meal to the database first.
+              </p>
+            )}
+
+            {MOCK_CLIENTS.map((client: any) => (
+              <button 
+                key={client.client_id} 
+                onClick={() => handleAssignSubmit(client.client_id)}
+              >
+                Assign to {client.name}
+              </button>
+            ))}
             <button onClick={() => setIsModalOpen(false)}>Close</button>
           </div>
         </div>
@@ -461,35 +621,35 @@ function GenerateView({
   );
 }
 
-// Wrapper to prevent the mount animation from looping
-const AnimatedCalendarWrapper = ({ children }: { children: React.ReactNode }) => {
-  return (
-    <section className={`${styles.calendar_view} ${styles.animate_mount}`}>
-      {children}
-    </section>
-  );
-};
+const AnimatedCalendarWrapper = ({ children }: { children: React.ReactNode }) => (
+  <section className={`${styles.calendar_view} ${styles.animate_mount}`}>
+    {children}
+  </section>
+);
 
-function CalendarView() {
+function CalendarView({ meals }: CalendarViewProps) {
   type CalendarAssignments = Record<number, Record<string, string>>;
 
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
-  const [selectedClientId, setSelectedClientId] = useState<number | null>(MOCK_CLIENTS[0]?.id || null);
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(MOCK_CLIENTS[0]?.client_id || null);
   const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
   const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
 
   const daysInMonth = (month: number, year: number): number => new Date(year, month + 1, 0).getDate();
   const startDayOfMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay();
 
-  const handleSelectSavedMeal = (day: number, meal: any): void => {
+  const handleSelectSavedMeal = (day: number, meal: MealPlan): void => {
     if (selectedClientId === null) return;
-    const dateKey = `${calendarDate.getFullYear()}-${calendarDate.getMonth() + 1}-${day}`;
+    
+    const month = String(calendarDate.getMonth() + 1).padStart(2, '0');
+    const d = String(day).padStart(2, '0');
+    const dateKey = `${calendarDate.getFullYear()}-${month}-${d}`;
 
-    setCalendarAssignments((prev: CalendarAssignments) => ({
+    setCalendarAssignments((prev) => ({
       ...prev,
       [selectedClientId]: {
         ...(prev[selectedClientId] || {}),
-        [dateKey]: meal.name, 
+        [dateKey]: meal.meal_name, 
       },
     }));
     setActiveMenuDate(null);
@@ -499,7 +659,7 @@ function CalendarView() {
     const cellDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), day);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return cellDate <= today;
+    return cellDate < today;
   };
 
   return (
@@ -511,16 +671,16 @@ function CalendarView() {
             value={selectedClientId || ''} 
             onChange={(e) => setSelectedClientId(Number(e.target.value))}
           >
-            {MOCK_CLIENTS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {MOCK_CLIENTS.map(c => <option key={c.client_id} value={c.client_id}>{c.name}</option>)}
           </select>
         </div>
-              
+            
         <div className={styles.month_nav}>
-          <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+          <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))}>
             &lt; Prev
           </button>
           <h2>{calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h2>
-          <button onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+          <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))}>
             Next &gt;
           </button>
         </div>
@@ -530,7 +690,7 @@ function CalendarView() {
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
           <div key={d} className={styles.day_label}>{d}</div>
         ))}
-              
+            
         {[...Array(startDayOfMonth)].map((_, i) => (
           <div key={`pad-${i}`} className={styles.day_empty} />
         ))}
@@ -554,7 +714,7 @@ function CalendarView() {
               <div className={styles.cell_header}>
                 <span className={styles.cell_date}>{day}</span>
                 <span className={locked ? styles.lock_icon : styles.add_icon}>
-                {locked ? '🔒' : '+'}
+                  {locked ? '🔒' : '+'}
                 </span>
               </div>
               
@@ -571,13 +731,13 @@ function CalendarView() {
                     <button onClick={(e) => { e.stopPropagation(); setActiveMenuDate(null); }}>x</button>
                   </header>
                   <div className={styles.saved_meal_list}>
-                    {MOCK_DRAFTS.map((meal) => (
+                    {meals.map((meal) => (
                       <div 
-                        key={meal.id} 
+                        key={meal.meal_id} 
                         className={styles.dummy_menu_item}
                         onClick={(e) => { e.stopPropagation(); handleSelectSavedMeal(day, meal); }}
                       >
-                        {meal.name}
+                        {meal.meal_name}
                       </div>
                     ))}
                   </div>
@@ -597,7 +757,7 @@ function CalendarView() {
   );
 }
 
-function SavedView({ meals, onEdit, onBack }: any) {
+function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
   return (
     <div className={`${styles.saved_container} ${styles.animate_mount}`}>
       <header className={styles.saved_header}>
@@ -623,7 +783,7 @@ function SavedView({ meals, onEdit, onBack }: any) {
             <div className={styles.card_header}>
               <h3>{meal.meal_name}</h3>
             </div>
-            <p><strong>{meal.calories_per_serving} kcal</strong> | {"n/a"}</p>
+            <p><strong>{meal.calories_per_serving} kcal</strong> | {meal.status}</p>
             <button 
               className={styles.edit_btn} 
               onClick={() => onEdit(meal)}
