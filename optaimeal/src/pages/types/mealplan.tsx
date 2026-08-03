@@ -11,6 +11,15 @@ export interface MealPlan {
   assignment_date: string;
 }
 
+// idk if this is needed
+interface Meal {
+  meal_id: number;
+  meal_name: string;
+  calories_per_serving?: number;
+  nutritional_score?: number;
+  ingredients?: string[] | string;
+  status: string;
+}
 
 export const createEmptyMeal = (): MealPlan => ({
   meal_id: null,
@@ -22,3 +31,14 @@ export const createEmptyMeal = (): MealPlan => ({
   ingredients: [],
   assignment_date: ""
 });
+
+export interface Client {
+  client_id: number;
+  client_name: string;
+}
+
+export interface Assignment {
+  client_id: number;
+  assignment_date: string; // YYYY-MM-DD format
+  meal: MealPlan;
+}

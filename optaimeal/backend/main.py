@@ -92,28 +92,64 @@ class MenuAssignmentRequest(BaseModel):
 # Send a specific menu to a client (using client ID)
 @app.post("/api/operator/menu/assign")
 def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(database.get_db)):
+    # 1. Fetch meal
     meal = db.query(models.Meal).filter(models.Meal.meal_id == request.meal_id).first()
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
 
-    if meal.status != "Draft":
-        raise HTTPException(status_code=400, detail="Only draft menus can be assigned")
+    # Prevent assigning archived meals if you have an Archived status, but allow Draft and Active
+    if meal.status == "Archived":
+        raise HTTPException(status_code=400, detail="Archived menus cannot be assigned")
 
+    # 2. Fetch client
     client = db.query(models.Client).filter(models.Client.client_id == request.client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found in database")
 
-    new_assignment = models.MealAssignment(
-        client_id=request.client_id,
-        meal_id=request.meal_id,
-        assignment_date=request.assignment_date
-    )
-    db.add(new_assignment)
+    # 3. Check for existing assignment for this client on this date
+    existing_assignment = db.query(models.MealAssignment).filter(
+        models.MealAssignment.client_id == request.client_id,
+        models.MealAssignment.assignment_date == request.assignment_date
+    ).first()
+
+    was_overwritten = False
+
+    if existing_assignment:
+        previous_meal = db.query(models.Meal).filter(models.Meal.meal_id == existing_assignment.meal_id).first()
+        
+        existing_assignment.meal_id = request.meal_id
+        was_overwritten = True
+
+        db.flush()
+
+        # Revert previous meal to "Draft" ONLY if no other active assignments still reference it
+        if previous_meal and previous_meal.meal_id != request.meal_id:
+            remaining_assignments = db.query(models.MealAssignment).filter(
+                models.MealAssignment.meal_id == previous_meal.meal_id
+            ).first()
+
+            if not remaining_assignments:
+                previous_meal.status = "Draft"
+    else:
+        new_assignment = models.MealAssignment(
+            client_id=request.client_id,
+            meal_id=request.meal_id,
+            assignment_date=request.assignment_date
+        )
+        db.add(new_assignment)
 
     meal.status = "Active"
     db.commit()
-    
-    return {"message": f"Meal '{meal.meal_name}' successfully assigned to '{client.client_name}'"}
+
+    if was_overwritten:
+        msg = f"Notice: Overwrote existing assignment for {client.client_name} on {request.assignment_date}. '{meal.meal_name}' is now active."
+    else:
+        msg = f"Meal '{meal.meal_name}' successfully assigned to '{client.client_name}'."
+
+    return {
+        "message": msg,
+        "overwritten": was_overwritten
+    }
 
 class ExchangeLog(Base):
     __tablename__ = "exchange_logs"
@@ -177,7 +213,47 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
     
     return new_meal
 
-# client routes
+class MealDetailResponse(BaseModel):
+    meal_id: int
+    meal_name: str
+    calories_per_serving: int
+    nutritional_score: int
+    ingredients: Union[List[str], str]
+    status: str
+
+    class Config:
+        from_attributes = True
+
+class ClientAssignmentResponse(BaseModel):
+    client_id: int
+    assignment_date: str
+    meal: MealDetailResponse
+
+@app.get("/api/client/{client_id}/assignments", response_model=List[ClientAssignmentResponse])
+def get_client_assignments(client_id: int, db: Session = Depends(database.get_db)):
+    # Verify client exists
+    client = db.query(models.Client).filter(models.Client.client_id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    assignments = (
+        db.query(models.MealAssignment, models.Meal)
+        .join(models.Meal, models.MealAssignment.meal_id == models.Meal.meal_id)
+        .filter(models.MealAssignment.client_id == client_id)
+        .all()
+    )
+
+    result = []
+    for assignment, meal in assignments:
+        result.append({
+            "client_id": assignment.client_id,
+            "assignment_date": assignment.assignment_date,
+            "meal": meal
+        })
+
+    return result
+
+### client routes ###
 
 #  Fetch the daily/weekly menu assigned to the authenticated client based on their id.
 @app.get("/api/client/menu/current/{client_id}")

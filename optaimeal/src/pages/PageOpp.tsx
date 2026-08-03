@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan } from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type Assignment } from './types/mealplan';
 
 // --- Types & Interfaces ---
 export interface Client {
@@ -28,7 +28,7 @@ interface GenerateViewProps {
   onSendMessage: () => void;
   onResetChat: () => void;
   onSaveDraft: () => Promise<void>;
-  onAssignToClient: (clientId: number | null) => void;
+  onAssignToClient: (clientId: number, date: string) => Promise<void>;
   savedMealId: number | null;
 }
 
@@ -100,52 +100,7 @@ export default function PageOpp() {
     setChatInput('');
   };
 
-  const handleSaveDraft = async (): Promise<number | null> => {
-    if (!selectedMeal) return null;
-
-    const isExistingMeal = Boolean(selectedMeal.meal_id); 
-    const endpoint = isExistingMeal 
-      ? `http://localhost:8000/api/meal/${selectedMeal.meal_id}` 
-      : "http://localhost:8000/api/meal";
-
-    const method = isExistingMeal ? 'PUT' : 'POST';
-
-    const payload = {
-      meal_name: selectedMeal.meal_name,
-      status: selectedMeal.status,
-      ingredients: selectedMeal.ingredients,
-      calories_per_serving: selectedMeal.calories_per_serving,
-      nutritional_score: selectedMeal.nutritional_score,
-      assignment_date: selectedMeal.assignment_date
-    };
-
-    try {
-      const response = await fetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server responded with status ${response.status}`);
-      }
-
-      const savedMeal = await response.json();
-      
-      const assignedId = savedMeal.meal_id; 
-
-      setSavedMealId(assignedId);
-      setSelectedMeal((prev) => (prev ? { ...prev, meal_id: assignedId } : null));
-
-      alert("Draft saved successfully!");
-      return assignedId;
-    } catch (e) {
-      console.error("Save failed:", e);
-      alert("Failed to save draft to the database. Please check server connectivity.");
-      return null; // Return null so calling functions know the save failed
-    }
-  };
-
+  
   const handleSaveAndUpdateFrontend = async () => {
     const savedId = await handleSaveDraft();
     if (!savedId || !selectedMeal) return;
@@ -168,52 +123,83 @@ export default function PageOpp() {
     });
   };
 
-  const handleAssignToClient = async (clientId: number | null) => {
-    if (!clientId) {
-      alert("Please select a valid client.");
-      return;
-    }
+  // Accept date parameter in handleAssignToClient
+const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
+  if (!selectedMeal) return null;
 
-    let currentMealId = savedMealId;
-    
-    if (!currentMealId) {
-      currentMealId = await handleSaveDraft();
-      if (!currentMealId) {
-        alert("Failed to save draft. Please save the meal before assigning.");
-        return;
-      }
-    }
+  const isExistingMeal = Boolean(selectedMeal.meal_id); 
+  const endpoint = isExistingMeal 
+    ? `http://localhost:8000/api/meal/${selectedMeal.meal_id}`
+    : "http://localhost:8000/api/meal";
 
-    const payload = {
-      meal_id: currentMealId,
-      client_id: clientId,
-      assignment_date: new Date().toISOString().split('T')[0]
-    };
+  const method = isExistingMeal ? 'PUT' : 'POST';
 
-    try {
-      const response = await fetch('http://localhost:8000/api/operator/menu/assign', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to assign meal.");
-      }
-
-      alert(data.message || "Meal assigned successfully!");
-
-      if (selectedMeal) {
-        setSelectedMeal({ ...selectedMeal, status: "Active" });
-      }
-
-    } catch (e: any) {
-      console.error("Assignment error:", e);
-      alert(`Assignment failed: ${e.message}`);
-    }
+  const payload = {
+    meal_name: selectedMeal.meal_name,
+    status: selectedMeal.status,
+    ingredients: selectedMeal.ingredients,
+    calories_per_serving: selectedMeal.calories_per_serving,
+    nutritional_score: selectedMeal.nutritional_score,
+    assignment_date: selectedMeal.assignment_date
   };
+
+  try {
+    const response = await fetch(endpoint, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server responded with status ${response.status}`);
+    }
+
+    const savedMeal = await response.json();
+    const assignedId = savedMeal.meal_id; 
+
+    setSavedMealId(assignedId);
+    setSelectedMeal((prev) => (prev ? { ...prev, meal_id: assignedId } : null));
+
+    if (showAlert) {
+      alert("Draft saved successfully!");
+    }
+    return assignedId;
+  } catch (e) {
+    console.error("Save failed:", e);
+    alert("Failed to save draft to the database. Please check server connectivity.");
+    return null;
+  }
+};
+
+const handleAssignToClient = async (clientId: number | null, date: string) => {
+  if (!clientId) return;
+
+  const currentMealId = await handleSaveDraft(false);
+  if (!currentMealId) return;
+
+  try {
+    const response = await fetch('http://localhost:8000/api/operator/menu/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        meal_id: currentMealId,
+        client_id: clientId,
+        assignment_date: date
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Failed to assign meal.");
+
+    alert(data.message);
+
+    setSelectedMeal((prev) => (
+      prev ? { ...prev, status: "Active", assignment_date: date } : null
+    ));
+  } catch (e: any) {
+    alert(`Assignment failed: ${e.message}`);
+  }
+};
 
   return (
     <div className={styles.opp_container}>
@@ -439,8 +425,9 @@ function GenerateView({
     }
   };
 
-  const handleAssignSubmit = (clientId: number | null) => {
-    onAssignToClient(clientId);
+
+  const handleAssignSubmit = async (clientId: number) => {
+    await onAssignToClient(clientId, assignmentDate);
     setIsModalOpen(false);
   };
 
@@ -457,6 +444,10 @@ function GenerateView({
     handleAddIngredient(ingredientInput.trim());
     setIngredientInput("");
   };
+
+  const [assignmentDate, setAssignmentDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
 
   return (
     <div className={`${styles.generate_container} ${styles.animate_mount}`}>
@@ -605,14 +596,42 @@ function GenerateView({
               </p>
             )}
 
-            {MOCK_CLIENTS.map((client: any) => (
-              <button 
-                key={client.client_id} 
-                onClick={() => handleAssignSubmit(client.client_id)}
+            <div style={{ marginBottom: '1.25rem', textAlign: 'left' }}>
+              <label 
+                htmlFor="assignment-date" 
+                style={{ display: 'block', fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.3rem' }}
               >
-                Assign to {client.name}
-              </button>
-            ))}
+                Assignment Date
+              </label>
+              <input 
+                id="assignment-date"
+                type="date" 
+                value={assignmentDate} 
+                onChange={(e) => setAssignmentDate(e.target.value)}
+                style={{ 
+                  width: '100%',
+                  padding: '0.5rem', 
+                  borderRadius: '4px', 
+                  border: '1px solid #ccc',
+                  fontSize: '0.95rem'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.25rem' }}>
+              {MOCK_CLIENTS && MOCK_CLIENTS.length > 0 ? (
+                MOCK_CLIENTS.map((client: any) => (
+                  <button 
+                    key={client.client_id} 
+                    onClick={() => handleAssignSubmit(client.client_id)}
+                  >
+                    Assign to <strong>{client.client_name || client.name}</strong>
+                  </button>
+                ))
+              ) : (
+                <p style={{ fontSize: '0.9rem', color: '#666' }}>No clients found in database.</p>
+              )}
+            </div>
             <button onClick={() => setIsModalOpen(false)}>Close</button>
           </div>
         </div>
@@ -632,12 +651,56 @@ function CalendarView({ meals }: CalendarViewProps) {
 
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
   const [selectedClientId, setSelectedClientId] = useState<number | null>(MOCK_CLIENTS[0]?.client_id || null);
+  const [clients, setClients] = useState<Client[]>([]);
   const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
   const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
 
   const daysInMonth = (month: number, year: number): number => new Date(year, month + 1, 0).getDate();
   const startDayOfMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay();
 
+  const fetchClientAssignments = async (clientId: number) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`http://localhost:8000/api/client/${clientId}/assignments`);
+      if (!res.ok) throw new Error("Failed to fetch assignments");
+      const data = await res.json();
+      setAssignments(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // fetch client list (maybe limit it to first ten or something)
+  useEffect(() => {
+      fetch('http://localhost:8000/api/clients')
+        .then((res) => res.json())
+        .then((data) => {
+          setClients(data);
+          if (data.length > 0) {
+            setSelectedClientId(data[0].client_id);
+          }
+        })
+        .catch((err) => console.error("Failed to load clients:", err));
+    }, []);
+
+    useEffect(() => {
+      if (selectedClientId) {
+        fetchClientAssignments(selectedClientId);
+      }
+    }, [selectedClientId]);
+
+    const assignmentMap = useMemo(() => {
+      const map: Record<string, string> = {};
+      assignments.forEach((item) => {
+        map[item.assignment_date] = item.meal.meal_name;
+      });
+      return map;
+    }, [assignments]);
+    
   const handleSelectSavedMeal = (day: number, meal: MealPlan): void => {
     if (selectedClientId === null) return;
     
@@ -662,6 +725,7 @@ function CalendarView({ meals }: CalendarViewProps) {
     return cellDate < today;
   };
 
+  // add handler for pushing meals
   return (
     <AnimatedCalendarWrapper>
       <header className={styles.calendar_header}>
@@ -671,7 +735,11 @@ function CalendarView({ meals }: CalendarViewProps) {
             value={selectedClientId || ''} 
             onChange={(e) => setSelectedClientId(Number(e.target.value))}
           >
-            {MOCK_CLIENTS.map(c => <option key={c.client_id} value={c.client_id}>{c.name}</option>)}
+            {clients.map((c: any) => (
+              <option key={c.client_id} value={c.client_id}>
+                {c.client_name || c.name}
+              </option>
+            ))}
           </select>
         </div>
             
@@ -701,8 +769,14 @@ function CalendarView({ meals }: CalendarViewProps) {
           const d = String(day).padStart(2, '0');
           const dateKey = `${calendarDate.getFullYear()}-${month}-${d}`;          
           
-          const currentClientAssignments = selectedClientId ? calendarAssignments[selectedClientId] : null;
-          const assignedMeal = currentClientAssignments ? currentClientAssignments[dateKey] : null;
+          // 1. Check local state edits first
+          const localMeal = selectedClientId ? calendarAssignments[selectedClientId]?.[dateKey] : null;
+
+          // 2. Fallback to live backend assignment for this date
+          const backendMeal = assignments.find(a => a.assignment_date === dateKey)?.meal?.meal_name;
+
+          // 3. Display local edit if present, otherwise backend assignment
+          const assignedMeal = localMeal || backendMeal;
           const locked = isDateLocked(day); 
 
           return (
@@ -731,15 +805,21 @@ function CalendarView({ meals }: CalendarViewProps) {
                     <button onClick={(e) => { e.stopPropagation(); setActiveMenuDate(null); }}>x</button>
                   </header>
                   <div className={styles.saved_meal_list}>
-                    {meals.map((meal) => (
-                      <div 
-                        key={meal.meal_id} 
-                        className={styles.dummy_menu_item}
-                        onClick={(e) => { e.stopPropagation(); handleSelectSavedMeal(day, meal); }}
-                      >
-                        {meal.meal_name}
+                    {meals && meals.length > 0 ? (
+                      meals.map((meal: any) => (
+                        <div 
+                          key={meal.meal_id} 
+                          className={styles.dummy_menu_item}
+                          onClick={(e) => { e.stopPropagation(); handleSelectSavedMeal(day, meal); }}
+                        >
+                          {meal.meal_name}
+                        </div>
+                      ))
+                    ) : (
+                      <div style={{ padding: '0.5rem', fontSize: '0.8rem', color: '#888' }}>
+                        No saved meals available
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               )}                    
