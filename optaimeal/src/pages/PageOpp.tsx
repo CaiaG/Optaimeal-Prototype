@@ -140,7 +140,6 @@ const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
     ingredients: selectedMeal.ingredients,
     calories_per_serving: selectedMeal.calories_per_serving,
     nutritional_score: selectedMeal.nutritional_score,
-    assignment_date: selectedMeal.assignment_date
   };
 
   try {

@@ -10,7 +10,6 @@ class Meal(Base):
     ingredients = Column(String);
     calories_per_serving = Column(Float)
     nutritional_score = Column(Float)
-    assignment_date= Column(String)
 
 
 class MealIngredients(Base):

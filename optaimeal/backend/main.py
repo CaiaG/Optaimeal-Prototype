@@ -57,7 +57,6 @@ class MealCreate(BaseModel):
     nutritional_score: float
     ingredients: Union[List[str], str]
     status: str = "Draft"
-    assignment_date: str
 
 
 # Update meal details given meal id
@@ -77,7 +76,6 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
     )
     existing_meal.calories_per_serving = meal_data.calories_per_serving
     existing_meal.nutritional_score = meal_data.nutritional_score
-    existing_meal.assignment_date = meal_data.assignment_date
 
     db.commit()
     db.refresh(existing_meal)
@@ -202,7 +200,6 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
         nutritional_score=meal_data.nutritional_score,
         ingredients=formatted_ingredients,
         status=meal_data.status,
-        assignment_date=meal_data.assignment_date
     )
     
     db.add(new_meal)
@@ -264,6 +261,7 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
 
     if not assignment:
         raise HTTPException(status_code=404, detail="No menu assigned to this client.")
+
     meal = db.query(models.Meal).filter(
         models.Meal.meal_id == assignment.meal_id,
         models.Meal.status == "Active"
@@ -272,7 +270,18 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
     if not meal:
         raise HTTPException(status_code=404, detail="Active menu not found.")
 
-    return meal
+    # Merge assignment and meal properties into a flat dictionary
+    return {
+        "assignment_id": assignment.id,
+        "client_id": assignment.client_id,
+        "assignment_date": str(assignment.assignment_date), # Attach the date here!
+        "meal_id": meal.meal_id,
+        "meal_name": meal.meal_name,
+        "calories_per_serving": meal.calories_per_serving,
+        "nutritional_score": meal.nutritional_score,
+        "ingredients": meal.ingredients,
+        "status": meal.status
+    }
 
 class MealAdjustmentRequest(BaseModel):
     meal_id: int
