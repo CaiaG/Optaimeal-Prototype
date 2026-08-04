@@ -3,8 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import date, datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
-from database import Base 
 
 from typing import Dict, Any, List, Union
 
@@ -22,18 +20,18 @@ app.add_middleware(
 )
 # how to generate meal id
 
-meals = [
-        { "id": 0, "meal_name": "Gobbeldy Gook", "recipe_id": 101, "status": "Active", "calories": 450, "nutritional_score": 3.5, "ingredients": ["water", "beans", "maize"],
-            "assignment_date": "2026-07-01", "client_ids": [10], "estimated_cost": 12},
-        { "id": 1,"meal_name": "Codswallop","recipe_id": 102,"status": "Draft","calories": 520,"nutritional_score": 8.0,"ingredients": ["fish", "potatoes"],
-            "assignment_date": "2026-07-02","client_ids": [13, 14],"estimated_cost": 3},
-        { "id": 2,"meal_name": "Balderdash","recipe_id": 103,"status": "Archived","calories": 349,"nutritional_score": 2.0,"ingredients": ["rice", "lentils", "carrots"],
-            "assignment_date": "2026-07-03","client_ids": [14-19],"estimated_cost": 3 },
-        { "id": 3, "meal_name": "Stinky Winky","recipe_id": 104,"status": "Active","calories": 610,"nutritional_score": 9.5,"ingredients": ["beef", "onions", "tomatoes"],
-            "assignment_date": "2026-07-04","client_ids": [20-23],"estimated_cost": 99},
-        { "id": 4, "meal_name": "Bubble and Squeak","recipe_id": 105,"status": "Draft","calories": 983,"nutritional_score": 5.0,"ingredients": ["cabbage", "potatoes", "leftover greens"],
-            "assignment_date": "2026-07-05","client_ids": [15, 24-26],"estimated_cost": 193 }
-    ]
+# meals = [
+#         { "id": 0, "meal_name": "Gobbeldy Gook", "recipe_id": 101, "status": "Active", "calories": 450, "nutritional_score": 3.5, "ingredients": ["water", "beans", "maize"],
+#             "assignment_date": "2026-07-01", "client_ids": [10], "estimated_cost": 12},
+#         { "id": 1,"meal_name": "Codswallop","recipe_id": 102,"status": "Draft","calories": 520,"nutritional_score": 8.0,"ingredients": ["fish", "potatoes"],
+#             "assignment_date": "2026-07-02","client_ids": [13, 14],"estimated_cost": 3},
+#         { "id": 2,"meal_name": "Balderdash","recipe_id": 103,"status": "Archived","calories": 349,"nutritional_score": 2.0,"ingredients": ["rice", "lentils", "carrots"],
+#             "assignment_date": "2026-07-03","client_ids": [14-19],"estimated_cost": 3 },
+#         { "id": 3, "meal_name": "Stinky Winky","recipe_id": 104,"status": "Active","calories": 610,"nutritional_score": 9.5,"ingredients": ["beef", "onions", "tomatoes"],
+#             "assignment_date": "2026-07-04","client_ids": [20-23],"estimated_cost": 99},
+#         { "id": 4, "meal_name": "Bubble and Squeak","recipe_id": 105,"status": "Draft","calories": 983,"nutritional_score": 5.0,"ingredients": ["cabbage", "potatoes", "leftover greens"],
+#             "assignment_date": "2026-07-05","client_ids": [15, 24-26],"estimated_cost": 193 }
+#     ]
 
 @app.get("/")
 def read_root():
@@ -268,7 +266,7 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
     return {
         "assignment_id": assignment.id,
         "client_id": assignment.client_id,
-        "assignment_date": str(assignment.assignment_date), # Attach the date here!
+        "assignment_date": str(assignment.assignment_date),
         "meal_id": meal.meal_id,
         "meal_name": meal.meal_name,
         "calories_per_serving": meal.calories_per_serving,
