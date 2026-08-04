@@ -2,6 +2,16 @@ import styles from './PageClient.module.css';
 import { useState, useEffect } from 'react';
 import { createEmptyMeal, type MealPlan } from './types/mealplan';
 
+export const parseIngredients = (ingredients: string[] | string | undefined | null): string[] => {
+  if (Array.isArray(ingredients)) {
+    return ingredients;
+  }
+  if (typeof ingredients === 'string' && ingredients.trim() !== '') {
+    return ingredients.split(',').map((item) => item.trim());
+  }
+  return [];
+};
+
 export default function PageClient() {
   const [clientId, setClientId] = useState<number | null>(null);
   const [inputClientId, setInputClientId] = useState<string>('');
@@ -205,13 +215,7 @@ export default function PageClient() {
         prev.includes(ing) ? prev.filter(i => i !== ing) : [...prev, ing]
       );
     };
-
-    let ingredientsList: string[] = [];
-      if (Array.isArray(meal.ingredients)) {
-        ingredientsList = meal.ingredients;
-      } else if (typeof meal.ingredients === 'string' && meal.ingredients.trim() !== '') {
-        ingredientsList = meal.ingredients.split(',').map((item: string) => item.trim());
-      }
+    const ingredientsList = parseIngredients(meal?.ingredients);
 
     return (
       <div className={styles.meal_details_view}>
@@ -271,7 +275,6 @@ export default function PageClient() {
   function ChatView({ assignments, selectedDay, onDaySelect }: { assignments: MealPlan[], selectedDay: any, onDaySelect: any}) {
     const [chatInput, setChatInput] = useState('');
     const [history, setHistory] = useState([{ sender: 'System', text: "Start chat" }]);
-    const [selectedMealId, setSelectedMealId] = useState<string | null>(null);
     
     const handleSendMessage = () => {
       if (!chatInput.trim()) return;
@@ -289,6 +292,8 @@ export default function PageClient() {
       setHistory([{ sender: 'System', text: "Yo" }]);
       setChatInput('');
     };
+    const currentMeal = assignments.find((m: any) => m.assignment_date === selectedDay);
+    const ingredientList = parseIngredients(currentMeal?.ingredients);
 
     return (
       <div className ={styles.chat_wrapper}>
@@ -345,9 +350,13 @@ export default function PageClient() {
                       <div className={styles.ingredients_list}>
                         <h4>Ingredients</h4>
                         <ul>
-                          {currentMeal?.ingredients.map((ing: string, index: number) => (
-                            <li key={index}>{ing}</li>
-                          ))}
+                          {ingredientList.length > 0 ? (
+                            ingredientList.map((ing: string, index: number) => (
+                              <li key={index}>{ing}</li>
+                            ))
+                          ) : (
+                            <li>No ingredients listed</li>
+                          )}
                         </ul>
                       </div>
                     </section>

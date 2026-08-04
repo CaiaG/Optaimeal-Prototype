@@ -149,12 +149,6 @@ def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(
         "overwritten": was_overwritten
     }
 
-class ExchangeLog(Base):
-    __tablename__ = "exchange_logs"
-    id = Column(Integer, primary_key=True, index=True)
-    meal_id = Column(Integer, ForeignKey("meals.id"))
-    timestamp = Column(DateTime)
-    client_changes = Column(String)
 
 # Access accumulated reports of client changes.
 @app.get("/api/operator/menu/analytics")
@@ -311,7 +305,7 @@ def adjust_client_menu(request: MealAdjustmentRequest, db: Session = Depends(dat
 # Request alternative, optimized recipes based on reported constraints.
 @app.get("/api/client/menu/optimize/{meal_id}")
 def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
-    meal = db.query(models.Meal).filter(models.Meal.id == meal_id).first()
+    meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
     if not meal:
         raise HTTPException(status_code=404, detail="Original meal not found")
 
@@ -323,7 +317,7 @@ def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
         raise HTTPException(status_code=400, detail="No reported constraints found to optimize against.")
 
     optimized_suggestion = {
-        "original_meal_id": meal.id,
+        "original_meal_id": meal.meal_id,
         "new_recipe_name": f"Optimized {meal.meal_name}",
         "status": "Active",
         "adjustments_applied": latest_log.client_changes,

@@ -1,12 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan, type Assignment } from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type Assignment, type Client } from './types/mealplan';
 
 // --- Types & Interfaces ---
-export interface Client {
-  client_id: number;
-  name: string;
-}
 
 interface HomeViewProps {
   meals: MealPlan[];
@@ -30,10 +26,18 @@ interface GenerateViewProps {
   onSaveDraft: () => Promise<void>;
   onAssignToClient: (clientId: number, date: string) => Promise<void>;
   savedMealId: number | null;
+  clients: Client[];
+  isLoadingClients?: boolean;
+  selectedClientId: number | null;
+  setSelectedClientId: React.Dispatch<React.SetStateAction<number | null>>;
 }
 
 interface CalendarViewProps {
   meals: MealPlan[];
+  clients: Client[];
+  isLoadingClients?: boolean;
+  selectedClientId: number | null;
+  setSelectedClientId: React.Dispatch<React.SetStateAction<number | null>>;
 }
 
 interface SavedViewProps {
@@ -51,18 +55,16 @@ export const MOCK_WEEKLY_MENU: MealPlan[] = [
   { meal_id: 4, meal_name: "Bubble and Squeak", status: "Draft", calories_per_serving: 983, nutritional_score: 5.0, ingredients: ["cabbage", "potatoes", "leftover greens"], assignment_date: "" }
 ];
 
-const MOCK_CLIENTS: Client[] = [
-  { client_id: 1, name: "Random Elementary" },
-  { client_id: 2, name: "Random High" }
-];
-
 // --- Main Application Component ---
 export default function PageOpp() {
   const [activeView, setActiveView] = useState('home');
   const [selectedMeal, setSelectedMeal] = useState<MealPlan | null>(null);
   const [meals, setMeals] = useState<MealPlan[]>([]);
-  
-  // Shared Chat State
+  const [clients, setClients] = useState<Client[]>([]);
+  const [isLoadingClients, setIsLoadingClients] = useState<boolean>(true);
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(clients[0]?.client_id || null);
+
+// Shared Chat State
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState([
     { sender: 'System', text: "Start chat" }
@@ -71,7 +73,28 @@ export default function PageOpp() {
   const [savedMealId, setSavedMealId] = useState<number | null>(null);
 
   useEffect(() => {
-    setMeals(MOCK_WEEKLY_MENU);
+
+    fetch('http://localhost:8000/api/meals')
+      .then((res) => res.ok ? res.json() : [])
+      .then((data: MealPlan[]) => setMeals(data))
+      .catch((err) => console.error('Error fetching meals:', err));
+
+      
+    fetch('http://localhost:8000/api/clients')
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch clients');
+        return res.json();
+      })
+      .then((data: Client[]) => {
+        // Normalize name / client_name property if necessary
+        const normalized = data.map((c) => ({
+          ...c,
+          client_name: c.client_name || `Client #${c.client_id}`,
+        }));
+        setClients(normalized);
+      })
+      .catch((err) => console.error('Error fetching clients:', err))
+      .finally(() => setIsLoadingClients(false));
   }, []);
 
   // --- Handlers ---
@@ -124,81 +147,83 @@ export default function PageOpp() {
   };
 
   // Accept date parameter in handleAssignToClient
-const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
-  if (!selectedMeal) return null;
+  const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
+    if (!selectedMeal) return null;
 
-  const isExistingMeal = Boolean(selectedMeal.meal_id); 
-  const endpoint = isExistingMeal 
-    ? `http://localhost:8000/api/meal/${selectedMeal.meal_id}`
-    : "http://localhost:8000/api/meal";
+    const isExistingMeal = Boolean(selectedMeal.meal_id); 
+    const endpoint = isExistingMeal 
+      ? `http://localhost:8000/api/meal/${selectedMeal.meal_id}`
+      : "http://localhost:8000/api/meal";
 
-  const method = isExistingMeal ? 'PUT' : 'POST';
+    const method = isExistingMeal ? 'PUT' : 'POST';
 
-  const payload = {
-    meal_name: selectedMeal.meal_name,
-    status: selectedMeal.status,
-    ingredients: selectedMeal.ingredients,
-    calories_per_serving: selectedMeal.calories_per_serving,
-    nutritional_score: selectedMeal.nutritional_score,
+    const payload = {
+      meal_name: selectedMeal.meal_name,
+      status: selectedMeal.status,
+      ingredients: selectedMeal.ingredients,
+      calories_per_serving: selectedMeal.calories_per_serving,
+      nutritional_score: selectedMeal.nutritional_score,
+    };
+
+    try {
+      const response = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server responded with status ${response.status}`);
+      }
+
+      const savedMeal = await response.json();
+      const assignedId = savedMeal.meal_id; 
+
+      setSavedMealId(assignedId);
+      setSelectedMeal((prev) => (prev ? { ...prev, meal_id: assignedId } : null));
+
+      if (showAlert) {
+        alert("Draft saved successfully!");
+      }
+      return assignedId;
+    } catch (e) {
+      console.error("Save failed:", e);
+      alert("Failed to save draft to the database. Please check server connectivity.");
+      return null;
+    }
   };
 
-  try {
-    const response = await fetch(endpoint, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+  const handleAssignToClient = async (clientId: number | null, date: string) => {
+    if (!clientId) return;
 
-    if (!response.ok) {
-      throw new Error(`Server responded with status ${response.status}`);
+    const currentMealId = await handleSaveDraft(false);
+    if (!currentMealId) return;
+
+    try {
+      const response = await fetch('http://localhost:8000/api/operator/menu/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meal_id: currentMealId,
+          client_id: clientId,
+          assignment_date: date
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Failed to assign meal.");
+
+      alert(data.message);
+
+      setSelectedMeal((prev) => (
+        prev ? { ...prev, status: "Active", assignment_date: date } : null
+      ));
+    } catch (e: any) {
+      alert(`Assignment failed: ${e.message}`);
     }
+  };
 
-    const savedMeal = await response.json();
-    const assignedId = savedMeal.meal_id; 
-
-    setSavedMealId(assignedId);
-    setSelectedMeal((prev) => (prev ? { ...prev, meal_id: assignedId } : null));
-
-    if (showAlert) {
-      alert("Draft saved successfully!");
-    }
-    return assignedId;
-  } catch (e) {
-    console.error("Save failed:", e);
-    alert("Failed to save draft to the database. Please check server connectivity.");
-    return null;
-  }
-};
-
-const handleAssignToClient = async (clientId: number | null, date: string) => {
-  if (!clientId) return;
-
-  const currentMealId = await handleSaveDraft(false);
-  if (!currentMealId) return;
-
-  try {
-    const response = await fetch('http://localhost:8000/api/operator/menu/assign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        meal_id: currentMealId,
-        client_id: clientId,
-        assignment_date: date
-      })
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Failed to assign meal.");
-
-    alert(data.message);
-
-    setSelectedMeal((prev) => (
-      prev ? { ...prev, status: "Active", assignment_date: date } : null
-    ));
-  } catch (e: any) {
-    alert(`Assignment failed: ${e.message}`);
-  }
-};
+  
 
   return (
     <div className={styles.opp_container}>
@@ -236,10 +261,19 @@ const handleAssignToClient = async (clientId: number | null, date: string) => {
             onSaveDraft={handleSaveAndUpdateFrontend}
             onAssignToClient={handleAssignToClient}
             savedMealId={savedMealId}
+            clients={clients}
+            isLoadingClients={isLoadingClients}
+            selectedClientId={selectedClientId}
+            setSelectedClientId={setSelectedClientId}
           />
         )}
         {activeView === 'calendar' && (
-          <CalendarView meals={meals} />
+          <CalendarView 
+          meals={meals}
+          clients={clients}
+          selectedClientId={selectedClientId}
+          setSelectedClientId={setSelectedClientId}
+           />
         )}
         {activeView === 'saved' && (
           <SavedView 
@@ -399,7 +433,7 @@ function HomeView({
 }
 
 function GenerateView({ 
-  meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId 
+  meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId, clients, isLoadingClients, selectedClientId, setSelectedClientId
 }: GenerateViewProps) {
   const [ingredientInput, setIngredientInput] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -617,21 +651,58 @@ function GenerateView({
               />
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.25rem' }}>
-              {MOCK_CLIENTS && MOCK_CLIENTS.length > 0 ? (
-                MOCK_CLIENTS.map((client: any) => (
-                  <button 
-                    key={client.client_id} 
-                    onClick={() => handleAssignSubmit(client.client_id)}
-                  >
-                    Assign to <strong>{client.client_name || client.name}</strong>
-                  </button>
-                ))
-              ) : (
-                <p style={{ fontSize: '0.9rem', color: '#666' }}>No clients found in database.</p>
-              )}
+            <div style={{ marginBottom: '1.25rem', textAlign: 'left' }}>
+              <label 
+                htmlFor="client-select" 
+                style={{ display: 'block', fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.3rem' }}
+              >
+                Select Client
+              </label>
+              <select 
+                id="client-select"
+                value={selectedClientId ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedClientId(val === '' ? null : Number(val));
+                }}
+                disabled={isLoadingClients}
+                style={{ 
+                  width: '100%',
+                  padding: '0.5rem', 
+                  borderRadius: '4px', 
+                  border: '1px solid #ccc',
+                  fontSize: '0.95rem'
+                }}
+              >
+                <option value="">
+                  {isLoadingClients ? 'Loading clients...' : '-- Select a Client --'}
+                </option>
+                {clients.map((client) => (
+                  <option key={client.client_id} value={client.client_id}>
+                    {client.client_name || `Client #${client.client_id}`} (ID: {client.client_id})
+                  </option>
+                ))}
+              </select>
             </div>
-            <button onClick={() => setIsModalOpen(false)}>Close</button>
+
+            <div className={styles.modal_actions} style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+              <button 
+                onClick={async () => {
+                  if (!selectedClientId || !assignmentDate) {
+                    alert("Please select both a client and an assignment date.");
+                    return;
+                  }
+                  handleAssignSubmit(selectedClientId);
+                }}
+                disabled={!selectedClientId || !assignmentDate}
+                className={styles.submit_button}
+              >
+                Confirm Assignment
+              </button>
+              <button onClick={() => setIsModalOpen(false)} className={styles.cancel_button}>
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -645,12 +716,11 @@ const AnimatedCalendarWrapper = ({ children }: { children: React.ReactNode }) =>
   </section>
 );
 
-function CalendarView({ meals }: CalendarViewProps) {
+function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }: CalendarViewProps) {
   type CalendarAssignments = Record<number, Record<string, string>>;
 
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
-  const [selectedClientId, setSelectedClientId] = useState<number | null>(MOCK_CLIENTS[0]?.client_id || null);
-  const [clients, setClients] = useState<Client[]>([]);
+  
   const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
   const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -672,19 +742,7 @@ function CalendarView({ meals }: CalendarViewProps) {
       setLoading(false);
     }
   };
-
-  // fetch client list (maybe limit it to first ten or something)
-  useEffect(() => {
-      fetch('http://localhost:8000/api/clients')
-        .then((res) => res.json())
-        .then((data) => {
-          setClients(data);
-          if (data.length > 0) {
-            setSelectedClientId(data[0].client_id);
-          }
-        })
-        .catch((err) => console.error("Failed to load clients:", err));
-    }, []);
+  
 
     useEffect(() => {
       if (selectedClientId) {
@@ -837,6 +895,7 @@ function CalendarView({ meals }: CalendarViewProps) {
 }
 
 function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
+  
   return (
     <div className={`${styles.saved_container} ${styles.animate_mount}`}>
       <header className={styles.saved_header}>

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, JSON
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from database import Base
 
 class Meal(Base):
@@ -50,3 +50,9 @@ class Client(Base):
     location = Column(String)
     population = Column(Integer)
    
+class ExchangeLog(Base):
+    __tablename__ = "exchange_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    meal_id = Column(Integer, ForeignKey("meals.meal_id"))
+    timestamp = Column(DateTime)
+    client_changes = Column(String)

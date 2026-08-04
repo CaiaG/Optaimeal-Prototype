@@ -25,6 +25,8 @@ export const createEmptyMeal = (): MealPlan => ({
 export interface Client {
   client_id: number;
   client_name: string;
+  // location?: string;
+  // population?: number;
 }
 
 export interface Assignment {
