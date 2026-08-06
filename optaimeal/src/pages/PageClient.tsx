@@ -62,6 +62,14 @@ export const parseIngredients = (
     .filter((item): item is MealIngredient => item !== null);
 };
 
+interface ChatViewProps {
+  assignments: MealPlan[];
+  selectedDay: string;
+  onDaySelect: (day: string) => void;
+  unavailable: string[]; //
+  onToggleIngredient: any;
+}
+
 export default function PageClient() {
   const [clientId, setClientId] = useState<number | null>(null);
   const [inputClientId, setInputClientId] = useState<string>('');
@@ -216,6 +224,8 @@ export default function PageClient() {
             assignments={weeklyAssignment} 
             selectedDay={selectedDay} 
             onDaySelect={setSelectedDay}
+            unavailable={unavailableIngredients} 
+            onToggleIngredient={setUnavailableIngredients} 
           />
         )}
         {activeView === 'calendar' && <p>Calendar Placeholder</p>}
@@ -295,65 +305,46 @@ export default function PageClient() {
           <h2>{meal.meal_name}</h2>
         </header>
         
-        <section className={styles.stats_box}></section>
+        <section className={styles.stats_box}> stats section</section>
         
         <section className={styles.quantity_section}>
           <label>Nr of students: </label>
           <input type="number" placeholder="q" />
         </section>
 
-        <section className={styles.ingredients}>
-          <h3>Ingredients Checklist</h3>
-          <p><small>Mark unavailable items with an [X]</small></p>
-          
-          {ingredientsList.length > 0 ? (
-            ingredientsList.map((ing: MealIngredient | string, i: number) => {
-              // Extract name and display string safely (handles structured objects and legacy strings)
-              const isObject = typeof ing === 'object' && ing !== null;
-              const ingName = isObject ? ing.ingredient_name : ing;
-              const ingId = isObject ? ing.ingredient_id : i;
-              
-              const displayText = isObject
-                ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
-                : ing;
+        <div className={styles.ingredients_list}>
+                        <h4>Ingredients</h4>
+                        <ul>
+                          {ingredientsList.length > 0 ? (
+                            ingredientsList.map((ing: MealIngredient | string, index: number) => {
+                              const isObject = typeof ing === 'object' && ing !== null;
+                              const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
+                              const displayText = isObject
+                                ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
+                                : ing;
 
-              // Check if ingredient name or ID is marked unavailable
-              const isUnavailable = unavailable.includes(ingName) || unavailable.includes(ingId as any);
+                              return <li key={key}>{displayText}</li>;
+                            })
+                          ) : (
+                            <li>No ingredients listed</li>
+                          )}
+                        </ul>
+                      </div>
 
-              return (
-                <div 
-                  key={`${ingId}-${i}`} 
-                  onClick={() => toggle(ingName)}
-                  style={{ 
-                    cursor: 'pointer', 
-                    textDecoration: isUnavailable ? 'line-through' : 'none',
-                    color: isUnavailable ? 'red' : 'inherit',
-                    marginBottom: '0.5rem'
-                  }}
-                >
-                  [{isUnavailable ? 'X' : ' '}] {displayText}
-                </div>
-              );
-            })
-          ) : (
-            <p style={{ color: '#888', fontStyle: 'italic' }}>No ingredients listed.</p>
-          )}
-        </section>
-
-        <button
-          className={styles.regenerate_btn}
-          onClick={() => alert("Regenerate logic should be handled here or passed as a prop")}
-        >
-          Regenerate Meal
-        </button>
+        
       </div>
     );
   }
 
-  function ChatView({ assignments, selectedDay, onDaySelect }: { assignments: MealPlan[], selectedDay: any, onDaySelect: any}) {
-    const [chatInput, setChatInput] = useState('');
+function ChatView({ assignments, selectedDay, onDaySelect, unavailable, onToggleIngredient }: ChatViewProps) {    const [chatInput, setChatInput] = useState('');
     const [history, setHistory] = useState([{ sender: 'System', text: "Start chat" }]);
     
+    const toggle = (ing: string) => {
+      onToggleIngredient((prev: string[]) => 
+        prev.includes(ing) ? prev.filter(i => i !== ing) : [...prev, ing]
+      );
+    };
+
     const handleSendMessage = () => {
       if (!chatInput.trim()) return;
       
@@ -425,25 +416,53 @@ export default function PageClient() {
                         <p><strong>Estimated Cost:</strong> {"n/a"}</p>
                       </div>
 
-                      <div className={styles.ingredients_list}>
-                        <h4>Ingredients</h4>
-                        <ul>
-                          {ingredientList.length > 0 ? (
-                            ingredientList.map((ing: MealIngredient | string, index: number) => {
-                              const isObject = typeof ing === 'object' && ing !== null;
-                              const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
-                              const displayText = isObject
-                                ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
-                                : ing;
+                      
 
-                              return <li key={key}>{displayText}</li>;
-                            })
-                          ) : (
-                            <li>No ingredients listed</li>
-                          )}
-                        </ul>
-                      </div>
+                      <section className={styles.ingredients}>
+                    <h3>Ingredients Checklist</h3>
+                    <p><small>Mark unavailable items with an [X]</small></p>
+                    
+                    {ingredientList.length > 0 ? (
+                      ingredientList.map((ing: MealIngredient | string, i: number) => {
+                        // Extract name and display string safely (handles structured objects and legacy strings)
+                        const isObject = typeof ing === 'object' && ing !== null;
+                        const ingName = isObject ? ing.ingredient_name : ing;
+                        const ingId = isObject ? ing.ingredient_id : i;
+                        
+                        const displayText = isObject
+                          ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
+                          : ing;
+
+                        // Check if ingredient name or ID is marked unavailable
+                        const isUnavailable = unavailable.includes(ingName) || unavailable.includes(ingId as any);
+
+                        return (
+                          <div 
+                            key={`${ingId}-${i}`} 
+                            onClick={() => toggle(ingName)}
+                            style={{ 
+                              cursor: 'pointer', 
+                              textDecoration: isUnavailable ? 'line-through' : 'none',
+                              color: isUnavailable ? 'red' : 'inherit',
+                              marginBottom: '0.5rem'
+                            }}
+                          >
+                            [{isUnavailable ? 'X' : ' '}] {displayText}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p style={{ color: '#888', fontStyle: 'italic' }}>No ingredients listed.</p>
+                    )}
+                  </section>
+
                     </section>
+                    <button
+                      className={styles.regenerate_btn}
+                      onClick={() => alert("Regenerate logic should be handled here or passed as a prop")}
+                    >
+                      Regenerate Meal
+                    </button>
                   </div>
               </div>
       </div>
