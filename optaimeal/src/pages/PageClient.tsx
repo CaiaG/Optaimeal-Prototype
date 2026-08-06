@@ -1,15 +1,65 @@
 import styles from './PageClient.module.css';
 import { useState, useEffect } from 'react';
-import { createEmptyMeal, type MealPlan } from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type MealIngredient } from './types/mealplan';
 
-export const parseIngredients = (ingredients: string[] | string | undefined | null): string[] => {
-  if (Array.isArray(ingredients)) {
-    return ingredients;
+export const parseIngredients = (
+  ingredients: MealIngredient[] | string[] | string | undefined | null
+): MealIngredient[] => {
+  if (!ingredients) return [];
+
+  let raw: any[] = [];
+
+  // 1. Parse string inputs (JSON stringified array OR comma-separated string)
+  if (typeof ingredients === 'string') {
+    const trimmed = ingredients.trim();
+    if (!trimmed) return [];
+
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        raw = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        // Fallback to CSV split if JSON parsing fails
+        raw = trimmed.split(',').map((s) => s.trim());
+      }
+    } else {
+      raw = trimmed.split(',').map((s) => s.trim());
+    }
+  } else if (Array.isArray(ingredients)) {
+    raw = ingredients;
   }
-  if (typeof ingredients === 'string' && ingredients.trim() !== '') {
-    return ingredients.split(',').map((item) => item.trim());
-  }
-  return [];
+
+  // 2. Normalize every item into a valid MealIngredient object
+  return raw
+    .map((item, index) => {
+      if (!item) return null;
+
+      // Already structured MealIngredient object
+      if (typeof item === 'object') {
+        return {
+          ingredient_id: item.ingredient_id ?? index + 1,
+          ingredient_name: item.ingredient_name || item.name || 'Unknown Ingredient',
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit || 'unit',
+        };
+      }
+
+      // Legacy string element (e.g., "Lentils")
+      if (typeof item === 'string') {
+        const str = item.trim();
+        if (!str) return null;
+
+        return {
+          ingredient_id: index + 1,
+          ingredient_name: str,
+          quantity: 1,
+          unit: 'unit',
+        };
+      }
+
+      return null;
+    })
+    .filter((item): item is MealIngredient => item !== null);
 };
 
 export default function PageClient() {
@@ -240,12 +290,23 @@ export default function PageClient() {
           <p><small>Mark unavailable items with an [X]</small></p>
           
           {ingredientsList.length > 0 ? (
-            ingredientsList.map((ing: string, i: number) => {
-              const isUnavailable = unavailable.includes(ing); 
+            ingredientsList.map((ing: MealIngredient | string, i: number) => {
+              // Extract name and display string safely (handles structured objects and legacy strings)
+              const isObject = typeof ing === 'object' && ing !== null;
+              const ingName = isObject ? ing.ingredient_name : ing;
+              const ingId = isObject ? ing.ingredient_id : i;
+              
+              const displayText = isObject
+                ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
+                : ing;
+
+              // Check if ingredient name or ID is marked unavailable
+              const isUnavailable = unavailable.includes(ingName) || unavailable.includes(ingId as any);
+
               return (
                 <div 
-                  key={i} 
-                  onClick={() => toggle(ing)}
+                  key={`${ingId}-${i}`} 
+                  onClick={() => toggle(ingName)}
                   style={{ 
                     cursor: 'pointer', 
                     textDecoration: isUnavailable ? 'line-through' : 'none',
@@ -253,7 +314,7 @@ export default function PageClient() {
                     marginBottom: '0.5rem'
                   }}
                 >
-                  [{isUnavailable ? 'X' : ' '}] {ing}
+                  [{isUnavailable ? 'X' : ' '}] {displayText}
                 </div>
               );
             })
@@ -351,9 +412,15 @@ export default function PageClient() {
                         <h4>Ingredients</h4>
                         <ul>
                           {ingredientList.length > 0 ? (
-                            ingredientList.map((ing: string, index: number) => (
-                              <li key={index}>{ing}</li>
-                            ))
+                            ingredientList.map((ing: MealIngredient | string, index: number) => {
+                              const isObject = typeof ing === 'object' && ing !== null;
+                              const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
+                              const displayText = isObject
+                                ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
+                                : ing;
+
+                              return <li key={key}>{displayText}</li>;
+                            })
                           ) : (
                             <li>No ingredients listed</li>
                           )}

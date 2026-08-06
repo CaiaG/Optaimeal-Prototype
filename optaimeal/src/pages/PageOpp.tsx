@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan, type Assignment, type Client } from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient} from './types/mealplan';
 
 // --- Types & Interfaces ---
 
@@ -30,6 +30,8 @@ interface GenerateViewProps {
   isLoadingClients?: boolean;
   selectedClientId: number | null;
   setSelectedClientId: React.Dispatch<React.SetStateAction<number | null>>;
+  availableIngredients: MasterIngredient[];
+  onCreateNewIngredient: (name: string, unit: string) => Promise<MasterIngredient | null>;
 }
 
 interface CalendarViewProps {
@@ -46,14 +48,66 @@ interface SavedViewProps {
   onBack: () => void;
 }
 
-// --- Mock Data & Helpers ---
-export const MOCK_WEEKLY_MENU: MealPlan[] = [
-  { meal_id: 0, meal_name: "Gobbeldy Gook", status: "Active", calories_per_serving: 450, nutritional_score: 3.5, ingredients: ["water", "beans", "maize"], assignment_date: "" },
-  { meal_id: 1, meal_name: "Codswallop", status: "Draft", calories_per_serving: 520, nutritional_score: 8.0, ingredients: ["fish", "potatoes"], assignment_date: "" },
-  { meal_id: 2, meal_name: "Balderdash", status: "Archived", calories_per_serving: 349, nutritional_score: 2.0, ingredients: ["rice", "lentils", "carrots"], assignment_date: "" },
-  { meal_id: 3, meal_name: "Stinky Winky", status: "Active", calories_per_serving: 610, nutritional_score: 9.5, ingredients: ["beef", "onions", "tomatoes"], assignment_date: "" },
-  { meal_id: 4, meal_name: "Bubble and Squeak", status: "Draft", calories_per_serving: 983, nutritional_score: 5.0, ingredients: ["cabbage", "potatoes", "leftover greens"], assignment_date: "" }
-];
+
+export const parseIngredients = (
+  ingredients: MealIngredient[] | string[] | string | undefined | null
+): MealIngredient[] => {
+  if (!ingredients) return [];
+
+  let raw: any[] = [];
+
+  // 1. Parse string inputs (JSON stringified array OR comma-separated string)
+  if (typeof ingredients === 'string') {
+    const trimmed = ingredients.trim();
+    if (!trimmed) return [];
+
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        raw = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        // Fallback to CSV split if JSON parsing fails
+        raw = trimmed.split(',').map((s) => s.trim());
+      }
+    } else {
+      raw = trimmed.split(',').map((s) => s.trim());
+    }
+  } else if (Array.isArray(ingredients)) {
+    raw = ingredients;
+  }
+
+  // 2. Normalize every item into a valid MealIngredient object
+  return raw
+    .map((item, index) => {
+      if (!item) return null;
+
+      // Already structured MealIngredient object
+      if (typeof item === 'object') {
+        return {
+          ingredient_id: item.ingredient_id ?? index + 1,
+          ingredient_name: item.ingredient_name || item.name || 'Unknown Ingredient',
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit || 'unit',
+        };
+      }
+
+      // Legacy string element (e.g., "Lentils")
+      if (typeof item === 'string') {
+        const str = item.trim();
+        if (!str) return null;
+
+        return {
+          ingredient_id: index + 1,
+          ingredient_name: str,
+          quantity: 1,
+          unit: 'unit',
+        };
+      }
+
+      return null;
+    })
+    .filter((item): item is MealIngredient => item !== null);
+};
 
 // --- Main Application Component ---
 export default function PageOpp() {
@@ -63,6 +117,7 @@ export default function PageOpp() {
   const [clients, setClients] = useState<Client[]>([]);
   const [isLoadingClients, setIsLoadingClients] = useState<boolean>(true);
   const [selectedClientId, setSelectedClientId] = useState<number | null>(clients[0]?.client_id || null);
+  const [availableIngredients, setAvailableIngredients] = useState<MasterIngredient[]>([]);
 
 // Shared Chat State
   const [chatInput, setChatInput] = useState('');
@@ -79,7 +134,7 @@ export default function PageOpp() {
       .then((data: MealPlan[]) => setMeals(data))
       .catch((err) => console.error('Error fetching meals:', err));
 
-      
+
     fetch('http://localhost:8000/api/clients')
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch clients');
@@ -95,7 +150,18 @@ export default function PageOpp() {
       })
       .catch((err) => console.error('Error fetching clients:', err))
       .finally(() => setIsLoadingClients(false));
-  }, []);
+
+      fetch('http://localhost:8000/api/ingredients')
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data) => {
+          const list = Array.isArray(data) ? data : data.ingredients || [];
+          setAvailableIngredients(list);
+        })
+        .catch((err) => {
+          console.error('Error fetching ingredients:', err);
+          setAvailableIngredients([]); // Default to empty array on error
+        });
+    }, []);
 
   // --- Handlers ---
   const handleNavigation = (view: string, meal: MealPlan | null = null) => {
@@ -124,18 +190,19 @@ export default function PageOpp() {
   };
 
   
+  // 1. Save Draft & Update Local Meals List
   const handleSaveAndUpdateFrontend = async () => {
     const savedId = await handleSaveDraft();
     if (!savedId || !selectedMeal) return;
 
-    setMeals(prevMeals => {
+    setMeals((prevMeals) => {
       const mealToSave: MealPlan = { 
         ...selectedMeal, 
         meal_id: savedId, 
-        status: 'Draft'
+        status: selectedMeal.status || 'Draft'
       };
 
-      const existingIndex = prevMeals.findIndex(m => m.meal_id === mealToSave.meal_id);
+      const existingIndex = prevMeals.findIndex((m) => m.meal_id === savedId);
       if (existingIndex >= 0) {
         const updatedMeals = [...prevMeals];
         updatedMeals[existingIndex] = mealToSave;
@@ -146,7 +213,7 @@ export default function PageOpp() {
     });
   };
 
-  // Accept date parameter in handleAssignToClient
+  // 2. Persist Meal Draft to Backend API
   const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
     if (!selectedMeal) return null;
 
@@ -157,12 +224,29 @@ export default function PageOpp() {
 
     const method = isExistingMeal ? 'PUT' : 'POST';
 
+    const sanitizedIngredients = (selectedMeal.ingredients || []).map((ing: any) => {
+      if (typeof ing === 'string') {
+        return {
+          ingredient_id: null,
+          ingredient_name: ing.trim(),
+          quantity: 1.0,
+          unit: 'unit'
+        };
+      }
+      return {
+        ingredient_id: ing.ingredient_id ?? null,
+        ingredient_name: ing.ingredient_name || ing.name || 'Unnamed Ingredient',
+        quantity: Number(ing.quantity) || 1.0,
+        unit: ing.unit || 'unit'
+      };
+    });
+
     const payload = {
-      meal_name: selectedMeal.meal_name,
-      status: selectedMeal.status,
-      ingredients: selectedMeal.ingredients,
-      calories_per_serving: selectedMeal.calories_per_serving,
-      nutritional_score: selectedMeal.nutritional_score,
+      meal_name: selectedMeal.meal_name || "Untitled Meal",
+      status: selectedMeal.status || 'Draft',
+      ingredients: sanitizedIngredients,
+      calories_per_serving: Number(selectedMeal.calories_per_serving) || 0.0,
+      nutritional_score: Number(selectedMeal.nutritional_score) || 0.0,
     };
 
     try {
@@ -173,26 +257,41 @@ export default function PageOpp() {
       });
 
       if (!response.ok) {
-        throw new Error(`Server responded with status ${response.status}`);
+        // ✅ Log exact Pydantic validation error details if 422 occurs
+        const errorData = await response.json().catch(() => ({}));
+        console.error("Server 422 Validation Detail:", errorData);
+        throw new Error(errorData.detail ? JSON.stringify(errorData.detail) : `Status ${response.status}`);
       }
 
       const savedMeal = await response.json();
-      const assignedId = savedMeal.meal_id; 
+      const assignedId = savedMeal.meal_id || selectedMeal.meal_id; 
+
+      const updatedIngredients = savedMeal.ingredients 
+        ? parseIngredients(savedMeal.ingredients) 
+        : sanitizedIngredients;
+
+      const updatedMealState: MealPlan = {
+        ...selectedMeal,
+        ...savedMeal,
+        meal_id: assignedId,
+        ingredients: updatedIngredients,
+      };
 
       setSavedMealId(assignedId);
-      setSelectedMeal((prev) => (prev ? { ...prev, meal_id: assignedId } : null));
+      setSelectedMeal(updatedMealState);
 
       if (showAlert) {
         alert("Draft saved successfully!");
       }
       return assignedId;
-    } catch (e) {
+    } catch (e: any) {
       console.error("Save failed:", e);
-      alert("Failed to save draft to the database. Please check server connectivity.");
+      alert(`Failed to save draft: ${e.message}`);
       return null;
     }
   };
 
+  // 3. Assign Meal to Client & Update Status
   const handleAssignToClient = async (clientId: number | null, date: string) => {
     if (!clientId) return;
 
@@ -213,16 +312,45 @@ export default function PageOpp() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Failed to assign meal.");
 
-      alert(data.message);
+      alert(data.message || "Meal assigned successfully!");
 
+      // Update active meal state
       setSelectedMeal((prev) => (
         prev ? { ...prev, status: "Active", assignment_date: date } : null
       ));
+
+      // Keep global meals list in sync
+      setMeals((prevMeals) =>
+        prevMeals.map((m) =>
+          m.meal_id === currentMealId
+            ? { ...m, status: "Active", assignment_date: date }
+            : m
+        )
+      );
     } catch (e: any) {
       alert(`Assignment failed: ${e.message}`);
     }
   };
 
+  const handleCreateNewIngredient = async (ingredientName: string): Promise<MasterIngredient | null> => {
+    try {
+      const res = await fetch('http://localhost:8000/api/ingredients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ingredient_name: ingredientName.trim() }),
+      });
+
+      if (!res.ok) throw new Error('Failed to create ingredient');
+
+      const created: MasterIngredient = await res.json();
+      setAvailableIngredients((prev) => [...prev, created]);
+      return created;
+    } catch (err) {
+      console.error('Error adding new ingredient:', err);
+      alert('Could not add new ingredient to database.');
+      return null;
+    }
+  };
   
 
   return (
@@ -265,6 +393,8 @@ export default function PageOpp() {
             isLoadingClients={isLoadingClients}
             selectedClientId={selectedClientId}
             setSelectedClientId={setSelectedClientId}
+            availableIngredients={availableIngredients}
+            onCreateNewIngredient={handleCreateNewIngredient}
           />
         )}
         {activeView === 'calendar' && (
@@ -433,29 +563,66 @@ function HomeView({
 }
 
 function GenerateView({ 
-  meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId, clients, isLoadingClients, selectedClientId, setSelectedClientId
+  meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId, clients, isLoadingClients, selectedClientId, setSelectedClientId, availableIngredients, onCreateNewIngredient
 }: GenerateViewProps) {
   const [ingredientInput, setIngredientInput] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedIngredient, setSelectedIngredient] = useState<MasterIngredient | null>(null);
+  const [quantity, setQuantity] = useState<number>(1);
+  const [unit, setUnit] = useState<string>('cups');
+  const [isCreating, setIsCreating] = useState<boolean>(false);
 
-  const handleAddIngredient = (name: string) => {
-    if (name.trim() && meal) {
-      const currentIngredients = meal.ingredients || [];
-      onUpdateMeal({ 
-        ...meal, 
-        ingredients: [...currentIngredients, name.trim()] 
-      });
-      setIngredientInput('');
+  const matchingIngredients = Array.isArray(availableIngredients)
+    ? availableIngredients.filter((item) =>
+        item.ingredient_name?.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    : [];
+
+  const exactMatch = Array.isArray(availableIngredients)
+    ? availableIngredients.some(
+        (item) => item.ingredient_name?.toLowerCase() === searchTerm.trim().toLowerCase()
+      )
+    : false;
+
+  
+
+  const handleAddMealIngredient = (ingredient: MasterIngredient) => {
+    if (!meal) return;
+
+    const newEntry: MealIngredient = {
+      ingredient_id: ingredient.ingredient_id,
+      ingredient_name: ingredient.ingredient_name,
+      quantity,
+      unit,
+    };
+
+    const updatedIngredients = [...(meal.ingredients || []), newEntry];
+    onUpdateMeal({ ...meal, ingredients: updatedIngredients });
+
+    // Reset controls
+    setSearchTerm('');
+    setSelectedIngredient(null);
+    setQuantity(1);
+  };
+
+  // Create new ingredient on backend, then add to meal
+  const handleCreateAndAdd = async () => {
+    if (!searchTerm.trim()) return;
+    setIsCreating(true);
+
+    const created = await onCreateNewIngredient(searchTerm.trim(), unit);
+    setIsCreating(false);
+
+    if (created) {
+      handleAddMealIngredient(created);
     }
   };
 
   const handleRemoveIngredient = (index: number) => {
-    if (meal && meal.ingredients) {
-      onUpdateMeal({ 
-        ...meal, 
-        ingredients: meal.ingredients.filter((_, i) => i !== index) 
-      });
-    }
+    if (!meal) return;
+    const updated = meal.ingredients.filter((_, i) => i !== index);
+    onUpdateMeal({ ...meal, ingredients: updated });
   };
 
 
@@ -472,11 +639,7 @@ function GenerateView({
     ? rawIngredients.split(',').map((item: string) => item.trim()).filter(Boolean)
     : [];
 
-  const triggerAddIngredient = () => {
-    if (!ingredientInput.trim()) return;
-    handleAddIngredient(ingredientInput.trim());
-    setIngredientInput("");
-  };
+  
 
   const [assignmentDate, setAssignmentDate] = useState<string>(
     new Date().toISOString().split('T')[0]
@@ -524,10 +687,14 @@ function GenerateView({
 
           <section className={styles.ingredients_section}>
             <h3>Ingredients List</h3>
+
+            {/* Structured Line Items List */}
             <ul className={styles.ingredients_list}>
-              {ingredientList.map((ing: string, i: number) => (
-                <li key={`${ing}-${i}`} className={styles.ingredient_item}>
-                  <span>{ing}</span>
+              {meal?.ingredients?.map((ing: MealIngredient, i: number) => (
+                <li key={`${ing.ingredient_id}-${i}`} className={styles.ingredient_item}>
+                  <span>
+                    <strong>{ing.quantity} {ing.unit}</strong> - {ing.ingredient_name}
+                  </span>
                   <button 
                     type="button"
                     className={styles.remove_ing} 
@@ -539,28 +706,109 @@ function GenerateView({
               ))}
             </ul>
 
-            <div className={styles.add_ingredient_container}>
-              <input 
-                type="text" 
-                placeholder="Add new ingredient..." 
-                value={ingredientInput}
-                onChange={(e) => setIngredientInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    triggerAddIngredient();
-                  }
-                }} 
-              />
-              <button 
-                type="button"
-                className={styles.add_ing_btn} 
-                onClick={triggerAddIngredient}
-              >
-                +
-              </button>
+            {/* Add Ingredient Combobox & Controls */}
+            <div className={styles.add_ingredient_container} style={{ flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                {/* Search Input */}
+                <input
+                  type="text"
+                  placeholder="Search or type new ingredient..."
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setSelectedIngredient(null);
+                  }}
+                  style={{ flex: 2 }}
+                />
+
+                {/* Quantity Input */}
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={quantity}
+                  onChange={(e) => setQuantity(Number(e.target.value))}
+                  style={{ flex: 1, minWidth: '70px' }}
+                />
+
+                {/* Unit Dropdown */}
+                <select 
+                  value={unit} 
+                  onChange={(e) => setUnit(e.target.value)} 
+                  style={{ flex: 1 }}
+                >
+                  <option value="cups">cups</option>
+                  <option value="g">g</option>
+                  <option value="oz">oz</option>
+                  <option value="tbsp">tbsp</option>
+                  <option value="tsp">tsp</option>
+                  <option value="whole">whole</option>
+                </select>
+              </div>
+
+              {/* Dropdown Suggestions & Creation Trigger */}
+              {searchTerm.trim() !== '' && !selectedIngredient && (
+                <div 
+                  className={styles.suggestion_box} 
+                  style={{ 
+                    border: '1px solid #ccc', 
+                    borderRadius: '4px', 
+                    maxHeight: '150px', 
+                    overflowY: 'auto',
+                    backgroundColor: '#fff' 
+                  }}
+                >
+                  {matchingIngredients.map((item) => (
+                    <div
+                      key={item.ingredient_id}
+                      onClick={() => {
+                        setSelectedIngredient(item);
+                        setSearchTerm(item.ingredient_name);
+                        if (item.default_unit) setUnit(item.default_unit);
+                      }}
+                      style={{ padding: '0.4rem 0.8rem', cursor: 'pointer', borderBottom: '1px solid #eee' }}
+                    >
+                      {item.ingredient_name}
+                    </div>
+                  ))}
+
+                  {!exactMatch && (
+                    <button
+                      type="button"
+                      onClick={handleCreateAndAdd}
+                      disabled={isCreating}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '0.5rem 0.8rem',
+                        background: '#f0f8ff',
+                        border: 'none',
+                        color: '#0056b3',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {isCreating ? 'Saving...' : `+ Create "${searchTerm.trim()}" as new ingredient`}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Confirm Add Button for Existing Selection */}
+              {selectedIngredient && (
+                <button
+                  type="button"
+                  className={styles.add_ing_btn}
+                  onClick={() => handleAddMealIngredient(selectedIngredient)}
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  Add {selectedIngredient.ingredient_name} to Meal
+                </button>
+              )}
             </div>
           </section>
+
+          
         </section>
         
         <section className={styles.llm_tool_section}>

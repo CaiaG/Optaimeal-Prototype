@@ -7,9 +7,11 @@ export interface MealPlan {
   status: MealStatus;
   calories_per_serving: number;
   nutritional_score: number;
-  ingredients: string[];
+  ingredients: MealIngredient[];
   assignment_date: string;
 }
+
+
 
 export const createEmptyMeal = (): MealPlan => ({
   meal_id: null,
@@ -33,4 +35,19 @@ export interface Assignment {
   client_id: number;
   assignment_date: string; // YYYY-MM-DD format
   meal: MealPlan;
+}
+
+export interface MasterIngredient {
+  ingredient_id: number;
+  ingredient_name: string;
+  default_unit?: string;
+  calories_per_unit?: number;
+}
+
+// Line item attached to a specific meal draft
+export interface MealIngredient {
+  ingredient_id: number;
+  ingredient_name: string;
+  quantity: number;
+  unit: string;
 }

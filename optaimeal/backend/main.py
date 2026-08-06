@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import date, datetime
+import json
 
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List, Union, Optional
 
 import models, database 
 
@@ -20,18 +21,85 @@ app.add_middleware(
 )
 # how to generate meal id
 
-# meals = [
-#         { "id": 0, "meal_name": "Gobbeldy Gook", "recipe_id": 101, "status": "Active", "calories": 450, "nutritional_score": 3.5, "ingredients": ["water", "beans", "maize"],
-#             "assignment_date": "2026-07-01", "client_ids": [10], "estimated_cost": 12},
-#         { "id": 1,"meal_name": "Codswallop","recipe_id": 102,"status": "Draft","calories": 520,"nutritional_score": 8.0,"ingredients": ["fish", "potatoes"],
-#             "assignment_date": "2026-07-02","client_ids": [13, 14],"estimated_cost": 3},
-#         { "id": 2,"meal_name": "Balderdash","recipe_id": 103,"status": "Archived","calories": 349,"nutritional_score": 2.0,"ingredients": ["rice", "lentils", "carrots"],
-#             "assignment_date": "2026-07-03","client_ids": [14-19],"estimated_cost": 3 },
-#         { "id": 3, "meal_name": "Stinky Winky","recipe_id": 104,"status": "Active","calories": 610,"nutritional_score": 9.5,"ingredients": ["beef", "onions", "tomatoes"],
-#             "assignment_date": "2026-07-04","client_ids": [20-23],"estimated_cost": 99},
-#         { "id": 4, "meal_name": "Bubble and Squeak","recipe_id": 105,"status": "Draft","calories": 983,"nutritional_score": 5.0,"ingredients": ["cabbage", "potatoes", "leftover greens"],
-#             "assignment_date": "2026-07-05","client_ids": [15, 24-26],"estimated_cost": 193 }
-#     ]
+class MealIngredientItem(BaseModel):
+    ingredient_id: Optional[int] = None
+    ingredient_name: str = "Unnamed Ingredient"
+    quantity: Optional[float] = 1.0
+    unit: Optional[str] = "unit"
+
+# 2. Updated Meal creation/update schema
+class MealCreate(BaseModel):
+    meal_name: str
+    calories_per_serving: float = 0.0
+    nutritional_score: float = 0.0
+    ingredients: List[MealIngredientItem] = [] 
+    status: str = "Draft"
+
+class MealOut(BaseModel):
+    meal_id: int
+    meal_name: str
+    calories_per_serving: float
+    nutritional_score: float = 0.0
+    ingredients: List[MealIngredientItem] = []
+    status: str = "Draft"
+
+    class Config:
+        from_attributes = True
+
+class MenuAssignmentRequest(BaseModel):
+    meal_id: int
+    client_id: int
+    assignment_date: str
+
+
+def serialize_ingredients(ingredients: List[MealIngredientItem]) -> str:
+    """Converts structured ingredients list into a JSON string for DB storage."""
+    return json.dumps([ing.model_dump() for ing in ingredients])
+
+def parse_ingredients_from_db(raw_ingredients) -> List[dict]:
+    """Safely parses DB string/JSON column into structured ingredient dicts."""
+    if not raw_ingredients:
+        return []
+    
+    if isinstance(raw_ingredients, list):
+        return raw_ingredients
+
+    if isinstance(raw_ingredients, str):
+        trimmed = raw_ingredients.strip()
+        if not trimmed:
+            return []
+        
+        # Parse JSON stringified array
+        if trimmed.startswith("[") or trimmed.startswith("{"):
+            try:
+                parsed = json.loads(trimmed)
+                return parsed if isinstance(parsed, list) else [parsed]
+            except Exception:
+                pass
+        
+        # Legacy fallback: CSV string (e.g. "Lentils, Carrots")
+        return [
+            {
+                "ingredient_id": i + 1,
+                "ingredient_name": name.strip(),
+                "quantity": 1.0,
+                "unit": "unit"
+            }
+            for i, name in enumerate(trimmed.split(",")) if name.strip()
+        ]
+
+    return []
+
+def format_meal_dict(meal: models.Meal) -> dict:
+    """Formats a Meal model into a dict matching MealOut response shape."""
+    return {
+        "meal_id": meal.meal_id,
+        "meal_name": meal.meal_name,
+        "calories_per_serving": meal.calories_per_serving,
+        "nutritional_score": meal.nutritional_score,
+        "status": meal.status,
+        "ingredients": parse_ingredients_from_db(meal.ingredients),
+    }
 
 @app.get("/")
 def read_root():
@@ -40,25 +108,17 @@ def read_root():
 # operator routes
 
 # get meal details given meal id
-@app.get("/api/meal/{meal_id}")
+@app.get("/api/meal/{meal_id}", response_model=MealOut)
 def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
     meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
     
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
     
-    return meal
-
-class MealCreate(BaseModel):
-    meal_name: str
-    calories_per_serving: float
-    nutritional_score: float
-    ingredients: Union[List[str], str]
-    status: str = "Draft"
-
+    return format_meal_dict(meal)
 
 # Update meal details given meal id
-@app.put("/api/meal/{meal_id}")
+@app.put("/api/meal/{meal_id}", response_model=MealOut)
 def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(database.get_db)):
     existing_meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
     
@@ -67,18 +127,14 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
     
     existing_meal.meal_name = meal_data.meal_name
     existing_meal.status = meal_data.status
-    existing_meal.ingredients = (
-        ", ".join(meal_data.ingredients) 
-        if isinstance(meal_data.ingredients, list) 
-        else meal_data.ingredients
-    )
     existing_meal.calories_per_serving = meal_data.calories_per_serving
     existing_meal.nutritional_score = meal_data.nutritional_score
+    existing_meal.ingredients = serialize_ingredients(meal_data.ingredients)
 
     db.commit()
     db.refresh(existing_meal)
     
-    return existing_meal
+    return format_meal_dict(existing_meal)
 
 class MenuAssignmentRequest(BaseModel):
     meal_id: int
@@ -93,7 +149,6 @@ def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
 
-    # Prevent assigning archived meals if you have an Archived status, but allow Draft and Active
     if meal.status == "Archived":
         raise HTTPException(status_code=400, detail="Archived menus cannot be assigned")
 
@@ -111,14 +166,16 @@ def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(
     was_overwritten = False
 
     if existing_assignment:
-        previous_meal = db.query(models.Meal).filter(models.Meal.meal_id == existing_assignment.meal_id).first()
+        previous_meal = db.query(models.Meal).filter(
+            models.Meal.meal_id == existing_assignment.meal_id
+        ).first()
         
         existing_assignment.meal_id = request.meal_id
         was_overwritten = True
 
         db.flush()
 
-        # Revert previous meal to "Draft" ONLY if no other active assignments still reference it
+        # Revert previous meal to "Draft" ONLY if no other active assignments reference it
         if previous_meal and previous_meal.meal_id != request.meal_id:
             remaining_assignments = db.query(models.MealAssignment).filter(
                 models.MealAssignment.meal_id == previous_meal.meal_id
@@ -144,7 +201,8 @@ def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(
 
     return {
         "message": msg,
-        "overwritten": was_overwritten
+        "overwritten": was_overwritten,
+        "assigned_meal_id": meal.meal_id
     }
 
 
@@ -159,48 +217,77 @@ def get_menu_analytics(db: Session = Depends(database.get_db)):
         
     return logs
 
+class IngredientCreate(BaseModel):
+    ingredient_name: str
+    price_per_unit: Optional[float] = 0.0
+    location: Optional[str] = "Pantry"
+    season: Optional[str] = "All Year"
+    availability: Optional[str] = "Available"
+
+class IngredientOut(BaseModel):
+    ingredient_id: int
+    ingredient_name: str
+    price_per_unit: Optional[float] = 0.0
+    location: Optional[str] = None
+    season: Optional[str] = None
+    availability: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 # Retrieve list of all ingredients
-@app.get("/api/ingredients")
+@app.get("/api/ingredients", response_model=list[IngredientOut])
 def get_all_ingredients(db: Session = Depends(database.get_db)):
-    ingredients = db.query(models.Ingredient).all()
-    if not ingredients:
-        return {"message": "No ingredients found in the database."}
-        
-    return ingredients
+    return db.query(models.Ingredient).all()
+
+@app.post("/api/ingredients", response_model=IngredientOut, status_code=status.HTTP_201_CREATED)
+def create_ingredient(payload: IngredientCreate, db: Session = Depends(database.get_db)):
+    clean_name = payload.ingredient_name.strip()
+
+    # Check for existing duplicate
+    existing = db.query(models.Ingredient).filter(
+        models.Ingredient.ingredient_name.ilike(clean_name)
+    ).first()
+
+    if existing:
+        return existing
+
+    # payload.model_dump() / payload.dict() contains all fields including default values
+    new_ingredient = models.Ingredient(
+        ingredient_name=clean_name,
+        price_per_unit=payload.price_per_unit,
+        location=payload.location,
+        season=payload.season,
+        availability=payload.availability
+    )
+    
+    db.add(new_ingredient)
+    db.commit()
+    db.refresh(new_ingredient)
+    return new_ingredient
 
 # retrieve list of all meals on backend
-@app.get("/api/meals")
+@app.get("/api/meals", response_model=List[MealOut])
 def get_all_meals(db: Session = Depends(database.get_db)):
     meals = db.query(models.Meal).all()
-    if not meals:
-            return {"message": "No meals found in the database."}
-            
-    return meals
+    return [format_meal_dict(m) for m in meals]
 
 # post new meal without a given id
-@app.post("/api/meal")
+@app.post("/api/meal", response_model=MealOut, status_code=status.HTTP_201_CREATED)
 def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
-    formatted_ingredients = (
-        ", ".join(meal_data.ingredients) 
-        if isinstance(meal_data.ingredients, list) 
-        else meal_data.ingredients
-    )
-
     new_meal = models.Meal(
         meal_name=meal_data.meal_name,
         calories_per_serving=meal_data.calories_per_serving,
         nutritional_score=meal_data.nutritional_score,
-        ingredients=formatted_ingredients,
         status=meal_data.status,
+        ingredients=serialize_ingredients(meal_data.ingredients)
     )
     
     db.add(new_meal)
-    
     db.commit()
-    
     db.refresh(new_meal)
     
-    return new_meal
+    return format_meal_dict(new_meal)
 
 class MealDetailResponse(BaseModel):
     meal_id: int
