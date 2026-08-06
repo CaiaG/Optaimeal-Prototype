@@ -121,6 +121,13 @@ def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
 @app.put("/api/meal/{meal_id}", response_model=MealOut)
 def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(database.get_db)):
     existing_meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
+
+    if existing_meal.status == "Archived":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Archived meals are locked and cannot be edited."
+        )
+
     
     if not existing_meal:
         raise HTTPException(status_code=404, detail="Meal not found")

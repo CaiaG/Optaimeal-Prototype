@@ -166,6 +166,7 @@ export default function PageClient() {
 
   return (
     <div className={styles.client_container}>
+      
       <Sidebar 
         assignments={weeklyAssignment} 
         selectedDay={selectedDay} 
@@ -225,7 +226,23 @@ export default function PageClient() {
 
   function Sidebar({ assignments, selectedDay, onDaySelect, onViewChange }: any) {
     return (
+
       <div className={styles.sidebar_wrapper}>
+        {/* Header banner displaying the active Client ID */}
+        {clientId && (
+          <div className={styles.client_header_bar}>
+            <span className={styles.client_id_badge}>
+              Client ID: <strong>#{clientId}</strong>
+            </span>
+            <button 
+              className={styles.change_client_btn}
+              onClick={() => setIsClientModalOpen(true)}
+            >
+              Switch Client
+            </button>
+          </div>
+        )}
+        
         <nav className={styles.top_sidebar}>
           {['main', 'chat', 'calendar'].map((view) => (
             <button 

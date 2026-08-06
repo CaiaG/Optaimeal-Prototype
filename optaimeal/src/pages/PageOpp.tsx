@@ -425,6 +425,23 @@ function HomeView({
 }: HomeViewProps) {
   const [addMode, setAddMode] = useState('button');
 
+
+  const [selectedMealAId, setSelectedMealAId] = useState<number | string>(
+    meals[0]?.meal_id ?? ''
+  );
+  const [selectedMealBId, setSelectedMealBId] = useState<number | string>(
+    meals[1]?.meal_id ?? meals[0]?.meal_id ?? ''
+  );
+
+  const mealA = meals.find((m) => m.meal_id === Number(selectedMealAId)) || meals[0];
+  const mealB = meals.find((m) => m.meal_id === Number(selectedMealBId)) || meals[1];
+
+  const getIngredientCount = (ingredients?: MealPlan['ingredients']) => {
+    if (!ingredients) return 0;
+    if (Array.isArray(ingredients)) return ingredients.length;
+    return 0;
+  };
+
   const scrollRef = useRef<HTMLElement>(null);
   const isMouseDown = useRef(false);
   const startX = useRef(0);
@@ -525,39 +542,125 @@ function HomeView({
           </div>
         ))}            
       </section>
+      
+      {/* 2. Menu Comparison Section */}
+      <section className={styles.comparison_section}>
+        <header className={styles.comparison_header}>
+          <h3>Menu Comparison</h3>
+          <p>Select two meals to evaluate nutritional differences and ingredients side-by-side.</p>
+        </header>
 
-      <section className={styles.scenario_tool_area}>
-        <div className={styles.chat_container}>
-          <header className={styles.chat_header}>
-            <h2>Chat</h2>
-            <button className={styles.reset_chat_btn} onClick={onResetChat}>Reset</button>
-          </header>
-
-          <div className={styles.chat_window}>
-            {chatHistory.map((msg, index) => (
-              <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
-                <p><strong>{msg.sender}:</strong> {msg.text}</p>
-              </div>
-            ))}
+        {meals.length < 2 ? (
+          <div className={styles.comparison_placeholder}>
+            <p>Add at least 2 meals to your library to enable menu comparison.</p>
           </div>
+        ) : (
 
-          <footer className={styles.chat_input_area}>
-            <textarea 
-              placeholder="Type requirements (e.g., 'sustainable menu for 500 students')..." 
-              className={styles.chat_input_mock} 
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  onSendMessage();
-                }
-              }} 
-            />
-            <div className={styles.chat_actions}></div>
-          </footer>
-        </div>
+          
+          <div className={styles.comparison_grid}>
+            {/* Column A */}
+            <div className={styles.comparison_column}>
+              <label className={styles.selector_label}>
+                Meal 1
+                <select
+                  value={selectedMealAId}
+                  onChange={(e) => setSelectedMealAId(e.target.value)}
+                  className={styles.meal_select}
+                >
+                  {meals.map((m) => (
+                    <option key={`a-${m.meal_id}`} value={m.meal_id ?? ''}>
+                      {m.meal_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {mealA && (
+                <div className={styles.comparison_card}>
+                  <h4>{mealA.meal_name}</h4>
+                  <span className={`${styles.status_tag} ${styles[mealA.status?.toLowerCase()]}`}>
+                    {mealA.status}
+                  </span>
+
+                  <div className={styles.metric_list}>
+                    <div className={styles.metric_row}>
+                      <span>Calories / Serving</span>
+                      <strong>{mealA.calories_per_serving} kcal</strong>
+                    </div>
+                    <div className={styles.metric_row}>
+                      <span>Nutritional Score</span>
+                      <strong>{mealA.nutritional_score ?? 'N/A'} / 10</strong>
+                    </div>
+                    <div className={styles.metric_row}>
+                      <span>Ingredients</span>
+                      <strong>{getIngredientCount(mealA.ingredients)} items</strong>
+                    </div>
+                  </div>
+
+                  <button
+                    className={styles.view_meal_btn}
+                    onClick={() => onNavigate('generate', mealA)}
+                  >
+                    Open in Editor
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className={styles.versus_divider}>VS</div>
+
+            {/* Column B */}
+            <div className={styles.comparison_column}>
+              <label className={styles.selector_label}>
+                Meal 2
+                <select
+                  value={selectedMealBId}
+                  onChange={(e) => setSelectedMealBId(e.target.value)}
+                  className={styles.meal_select}
+                >
+                  {meals.map((m) => (
+                    <option key={`a-${m.meal_id}`} value={m.meal_id ?? ''}>
+                      {m.meal_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {mealB && (
+                <div className={styles.comparison_card}>
+                  <h4>{mealB.meal_name}</h4>
+                  <span className={`${styles.status_tag} ${styles[mealB.status?.toLowerCase()]}`}>
+                    {mealB.status}
+                  </span>
+
+                  <div className={styles.metric_list}>
+                    <div className={styles.metric_row}>
+                      <span>Calories / Serving</span>
+                      <strong>{mealB.calories_per_serving} kcal</strong>
+                    </div>
+                    <div className={styles.metric_row}>
+                      <span>Nutritional Score</span>
+                      <strong>{mealB.nutritional_score ?? 'N/A'} / 10</strong>
+                    </div>
+                    <div className={styles.metric_row}>
+                      <span>Ingredients</span>
+                      <strong>{getIngredientCount(mealB.ingredients)} items</strong>
+                    </div>
+                  </div>
+
+                  <button
+                    className={styles.view_meal_btn}
+                    onClick={() => onNavigate('generate', mealB)}
+                  >
+                    Open in Editor
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </section>
+      
     </div>
   );
 }
@@ -565,7 +668,6 @@ function HomeView({
 function GenerateView({ 
   meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId, clients, isLoadingClients, selectedClientId, setSelectedClientId, availableIngredients, onCreateNewIngredient
 }: GenerateViewProps) {
-  const [ingredientInput, setIngredientInput] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIngredient, setSelectedIngredient] = useState<MasterIngredient | null>(null);

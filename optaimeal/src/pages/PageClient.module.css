@@ -24,6 +24,49 @@
   box-sizing: border-box;
 }
 
+.client_header_bar {
+  grid-column: 1 / -1; /* Spans full width if using CSS grid */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #e9ecef;
+  margin-bottom: 16px;
+}
+
+.client_id_badge {
+  font-size: 0.95rem;
+  color: #495057;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.client_id_badge strong {
+  color: #212529;
+  font-weight: 600;
+  background-color: #e9ecef;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.change_client_btn {
+  background: transparent;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.85rem;
+  color: #495057;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.change_client_btn:hover {
+  background-color: #e9ecef;
+  color: #212529;
+}
+
 .modal_actions {
   display: flex;
   gap: 0.5rem;
