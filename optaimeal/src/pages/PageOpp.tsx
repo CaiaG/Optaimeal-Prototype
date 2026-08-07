@@ -175,11 +175,42 @@ export default function PageOpp() {
 
   const handleSendMessage = () => {
     if (chatInput.trim() === '') return;
+
     const newMessage = { sender: 'User', text: chatInput };
     setChatHistory((prev) => [...prev, newMessage]);
+
+    const cleanPrompt = chatInput.toLowerCase().trim();
     setChatInput('');
+
+    // MOCK EXAMPLE FOR CHATBOT INTERACTION
+    if (cleanPrompt.includes('calculate nutrition score')) {
+      // Generate a random integer score between 0 and 10
+      const mockScore = Math.floor(Math.random() * 11);
+
+      setTimeout(() => {
+        setSelectedMeal((prev: any) => ({
+          ...prev,
+          nutritional_score: mockScore,
+        }));
+
+        // 2. Append assistant response directly to chat history
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            sender: 'System',
+            text: `Based on the current ingredient breakdown, I've calculated a Nutritional Score of **${mockScore}/10**. I've updated the meal metrics for you!`,
+          },
+        ]);
+      }, 600);
+
+      return; // Exit early so general feedback timeout doesn't fire
+    }
+
     setTimeout(() => {
-      setChatHistory(prev => [...prev, { sender: 'System', text: "Feedback received." }]);
+      setChatHistory((prev) => [
+        ...prev,
+        { sender: 'System', text: 'Feedback received.' },
+      ]);
     }, 1000);
   };
 
@@ -852,7 +883,7 @@ function GenerateView({
             />
           </div>
           <div className={styles.input_group}>
-            <label>Target Calories (per serving)</label>
+            <label>Calories (per serving)</label>
             <input 
               type="number" 
               value={meal?.calories_per_serving ?? ""} 
@@ -863,7 +894,16 @@ function GenerateView({
           <div className={styles.metrics_dashboard}>
             <div className={styles.metric_card}>
               <span>Nutritional Score</span>
-              <strong>{meal?.nutritional_score ?? "--"}</strong>
+              <input
+                type="number"
+                className={styles.metric_input}
+                value={meal?.nutritional_score ?? ''}
+                onChange={(e) => meal && onUpdateMeal({ ...meal, nutritional_score: Number(e.target.value) })}
+                placeholder="--"
+                min="0"
+                max="10"
+                step="1"
+              />
             </div>
             <div className={styles.metric_card}>
               <span>Status</span>
