@@ -27,6 +27,9 @@ class MealIngredientItem(BaseModel):
     quantity: Optional[float] = 1.0
     unit: Optional[str] = "unit"
 
+    class Config:
+        from_attributes = True
+
 # 2. Updated Meal creation/update schema
 class MealCreate(BaseModel):
     meal_name: str
@@ -46,10 +49,86 @@ class MealOut(BaseModel):
     class Config:
         from_attributes = True
 
+class MealAdjustmentRequest(BaseModel):
+    meal_id: int
+    adjustments: Dict[str, Any]
 
-def serialize_ingredients(ingredients: List[MealIngredientItem]) -> str:
-    """Converts structured ingredients list into a JSON string for DB storage."""
-    return json.dumps([ing.model_dump() for ing in ingredients])
+class MenuAssignmentRequest(BaseModel):
+    meal_id: int
+    client_id: int
+    assignment_date: date
+
+class IngredientCreate(BaseModel):
+    ingredient_name: str
+    price_per_unit: Optional[float] = 0.0
+    location: Optional[str] = "Pantry"
+    season: Optional[str] = "All Year"
+    availability: Optional[str] = "Available"
+
+class IngredientOut(BaseModel):
+    ingredient_id: int
+    ingredient_name: str
+    price_per_unit: Optional[float] = 0.0
+    location: Optional[str] = None
+    season: Optional[str] = None
+    availability: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class MealDetailResponse(BaseModel):
+    meal_id: int
+    meal_name: str
+    calories_per_serving: float = 0.0
+    nutritional_score: float = 0.0
+    ingredients: List[MealIngredientItem] = []
+    status: str = "Draft"
+
+    class Config:
+        from_attributes = True
+
+class ClientAssignmentResponse(BaseModel):
+    client_id: int
+    assignment_date: str
+    meal: MealDetailResponse
+    
+class ClientCreate(BaseModel):
+    client_name: str
+    location: Optional[str] = None
+    population: Optional[int] = None
+
+class ClientResponse(BaseModel):
+    client_id: int
+    client_name: str
+    location: Optional[str] = None  
+    population: Optional[int] = None 
+
+    class Config:
+        from_attributes = True
+
+
+def format_meal(meal: models.Meal) -> dict:
+    ingredients_list = []
+    
+    for mi in meal.meal_ingredients:
+        # Pulls live ingredient_name from Master Ingredients via relationship
+        ing_name = mi.ingredient.ingredient_name if mi.ingredient else "Unnamed Ingredient"
+        
+        ingredients_list.append({
+            "ingredient_id": mi.ingredient_id,
+            "ingredient_name": ing_name,
+            "quantity": mi.ingredient_quantity,
+            "unit": mi.unit,
+        })
+    
+    return {
+        "meal_id": meal.meal_id,
+        "meal_name": meal.meal_name,
+        "status": meal.status,
+        "calories_per_serving": meal.calories_per_serving,
+        "nutritional_score": meal.nutritional_score,
+        "ingredients": ingredients_list,
+    }
 
 def parse_ingredients_from_db(raw_ingredients) -> List[dict]:
     """Safely parses DB string/JSON column into structured ingredient dicts."""
@@ -110,7 +189,7 @@ def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
     
-    return format_meal_dict(meal)
+    return format_meal(meal)
 
 # Update meal details given meal id
 @app.put("/api/meal/{meal_id}", response_model=MealOut)
@@ -118,7 +197,7 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
     existing_meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
 
     if not existing_meal:
-            raise HTTPException(status_code=404, detail="Meal not found")
+        raise HTTPException(status_code=404, detail="Meal not found")
     
     if existing_meal.status == "Archived":
         raise HTTPException(
@@ -126,21 +205,44 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
             detail="Archived meals are locked and cannot be edited."
         )
   
+    # 1. Update basic scalar fields
     existing_meal.meal_name = meal_data.meal_name
     existing_meal.status = meal_data.status
     existing_meal.calories_per_serving = meal_data.calories_per_serving
     existing_meal.nutritional_score = meal_data.nutritional_score
-    existing_meal.ingredients = serialize_ingredients(meal_data.ingredients)
+
+    # 2. Wipe old join records for this meal
+    db.query(models.MealIngredients).filter(
+        models.MealIngredients.meal_id == meal_id
+    ).delete()
+
+    # 3. Re-insert updated join records
+    for item in meal_data.ingredients:
+        ing_id = item.ingredient_id
+
+        # Fallback: handle ingredients added purely by text name
+        if not ing_id and item.ingredient_name:
+            db_ing = db.query(models.Ingredient).filter(
+                models.Ingredient.ingredient_name == item.ingredient_name.strip()
+            ).first()
+            if not db_ing:
+                db_ing = models.Ingredient(ingredient_name=item.ingredient_name.strip())
+                db.add(db_ing)
+                db.flush()
+            ing_id = db_ing.ingredient_id
+
+        if ing_id:
+            db.add(models.MealIngredients(
+                meal_id=meal_id,
+                ingredient_id=ing_id,
+                ingredient_quantity=item.quantity or 1.0,
+                unit=item.unit or "unit",
+            ))
 
     db.commit()
     db.refresh(existing_meal)
     
-    return format_meal_dict(existing_meal)
-
-class MenuAssignmentRequest(BaseModel):
-    meal_id: int
-    client_id: int
-    assignment_date: date
+    return format_meal(existing_meal)
 
 # Send a specific menu to a client (using client ID)
 @app.post("/api/operator/menu/assign")
@@ -218,23 +320,7 @@ def get_menu_analytics(db: Session = Depends(database.get_db)):
         
     return logs
 
-class IngredientCreate(BaseModel):
-    ingredient_name: str
-    price_per_unit: Optional[float] = 0.0
-    location: Optional[str] = "Pantry"
-    season: Optional[str] = "All Year"
-    availability: Optional[str] = "Available"
 
-class IngredientOut(BaseModel):
-    ingredient_id: int
-    ingredient_name: str
-    price_per_unit: Optional[float] = 0.0
-    location: Optional[str] = None
-    season: Optional[str] = None
-    availability: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 # Retrieve list of all ingredients
 @app.get("/api/ingredients", response_model=list[IngredientOut])
@@ -274,37 +360,46 @@ def get_all_meals(db: Session = Depends(database.get_db)):
     return [format_meal_dict(m) for m in meals]
 
 # post new meal without a given id
-@app.post("/api/meal", response_model=MealOut, status_code=status.HTTP_201_CREATED)
+@app.post("/api/meal", response_model=MealOut)
 def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
+    # 1. Save Parent Meal
     new_meal = models.Meal(
         meal_name=meal_data.meal_name,
+        status=meal_data.status,
         calories_per_serving=meal_data.calories_per_serving,
         nutritional_score=meal_data.nutritional_score,
-        status=meal_data.status,
-        ingredients=serialize_ingredients(meal_data.ingredients)
     )
-    
     db.add(new_meal)
+    db.flush()  # Assigns meal_id before committing
+
+    # 2. Insert Join Records into MealIngredients
+    for item in meal_data.ingredients:
+        ing_id = item.ingredient_id
+
+        # Fallback: if ingredient_id is missing, find or create the ingredient by name
+        if not ing_id and item.ingredient_name:
+            db_ing = db.query(models.Ingredient).filter(
+                models.Ingredient.ingredient_name == item.ingredient_name.strip()
+            ).first()
+            if not db_ing:
+                db_ing = models.Ingredient(ingredient_name=item.ingredient_name.strip())
+                db.add(db_ing)
+                db.flush()
+            ing_id = db_ing.ingredient_id
+
+        if ing_id:
+            db.add(models.MealIngredients(
+                meal_id=new_meal.meal_id,
+                ingredient_id=ing_id,
+                ingredient_quantity=item.quantity or 1.0,
+                unit=item.unit or "unit",
+            ))
+
     db.commit()
     db.refresh(new_meal)
-    
-    return format_meal_dict(new_meal)
+    return format_meal(new_meal)
 
-class MealDetailResponse(BaseModel):
-    meal_id: int
-    meal_name: str
-    calories_per_serving: int
-    nutritional_score: int
-    ingredients: Union[List[str], str]
-    status: str
 
-    class Config:
-        from_attributes = True
-
-class ClientAssignmentResponse(BaseModel):
-    client_id: int
-    assignment_date: str
-    meal: MealDetailResponse
 
 @app.get("/api/client/{client_id}/assignments", response_model=List[ClientAssignmentResponse])
 def get_client_assignments(client_id: int, db: Session = Depends(database.get_db)):
@@ -325,24 +420,11 @@ def get_client_assignments(client_id: int, db: Session = Depends(database.get_db
         result.append({
             "client_id": assignment.client_id,
             "assignment_date": assignment.assignment_date,
-            "meal": meal
+            "meal": format_meal(meal)  
         })
 
     return result
 
-class ClientCreate(BaseModel):
-    client_name: str
-    location: Optional[str] = None
-    population: Optional[int] = None
-
-class ClientResponse(BaseModel):
-    client_id: int
-    client_name: str
-    location: Optional[str] = None  
-    population: Optional[int] = None 
-
-    class Config:
-        from_attributes = True
 
 
 # post new client
@@ -394,10 +476,6 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
         "ingredients": meal.ingredients,
         "status": meal.status
     }
-
-class MealAdjustmentRequest(BaseModel):
-    meal_id: int
-    adjustments: Dict[str, Any]
 
 #  Send real-time changes (e.g., ingredient availability, quantity adjustments) back to the backend.
 @app.post("/api/client/menu/adjust")

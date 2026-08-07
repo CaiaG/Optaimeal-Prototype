@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from database import Base
 
 class Meal(Base):
@@ -7,18 +8,28 @@ class Meal(Base):
     meal_id = Column(Integer, primary_key=True, index=True)
     meal_name = Column(String, index=True)
     status = Column(String, default="Draft")
-    ingredients = Column(String);
     calories_per_serving = Column(Float)
     nutritional_score = Column(Float)
+
+    meal_ingredients = relationship(
+        "MealIngredients",
+        back_populates="meal",
+        cascade="all, delete-orphan"
+    )
 
 
 class MealIngredients(Base):
     __tablename__ = "meal_ingredients"
 
     id = Column(Integer, primary_key=True, index=True)
-    meal_id = Column(Integer, index=True)
-    ingredient_id = Column(Integer, index=True)
-    ingredient_quantity = Column(Float)
+    meal_id = Column(Integer, ForeignKey("meals.meal_id", ondelete="CASCADE"), index=True)
+    ingredient_id = Column(Integer, ForeignKey("ingredients.ingredient_id"), index=True)
+    ingredient_quantity = Column(Float, default=1.0)
+    unit = Column(String, default="unit")
+
+    # Relationships
+    meal = relationship("Meal", back_populates="meal_ingredients")
+    ingredient = relationship("Ingredient")
 
 
 class Ingredient(Base):
@@ -26,10 +37,10 @@ class Ingredient(Base):
 
     ingredient_id = Column(Integer, primary_key=True, index=True)
     ingredient_name = Column(String, index=True)
-    price_per_unit = Column(Float)
-    location = Column(String)
-    season = Column(String)
-    availability = Column(String)
+    price_per_unit = Column(Float, nullable=True)
+    location = Column(String, nullable=True)
+    season = Column(String, nullable=True)
+    availability = Column(String, nullable=True)
     # maybe a list of possible substitutes?
 
 # client id & assignment date pairs should be unique

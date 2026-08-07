@@ -235,9 +235,8 @@ export default function PageOpp() {
 
       const assignedId = savedMeal.meal_id || selectedMeal.meal_id;
 
-      const updatedIngredients = savedMeal.ingredients
-        ? parseIngredients(savedMeal.ingredients)
-        : sanitizedIngredients;
+      // Use savedMeal.ingredients directly since apiFetch already parses the JSON response
+      const updatedIngredients = savedMeal.ingredients || sanitizedIngredients;
 
       const updatedMealState: MealPlan = {
         ...selectedMeal,
