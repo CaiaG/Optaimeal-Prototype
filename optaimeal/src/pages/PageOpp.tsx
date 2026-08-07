@@ -118,7 +118,8 @@ export default function PageOpp() {
   const [isLoadingClients, setIsLoadingClients] = useState<boolean>(true);
   const [selectedClientId, setSelectedClientId] = useState<number | null>(clients[0]?.client_id || null);
   const [availableIngredients, setAvailableIngredients] = useState<MasterIngredient[]>([]);
-
+  const [newLocation, setNewLocation] = useState('');
+  const [newPopulation, setNewPopulation] = useState('');
 // Shared Chat State
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState([
@@ -391,11 +392,18 @@ export default function PageOpp() {
     const trimmedName = newClientName.trim();
     if (!trimmedName) return;
 
+    const trimmedLocation = newLocation.trim();
+    const parsedPopulation = newPopulation !== '' ? parseInt(newPopulation, 10) : null;
+
     try {
       const res = await fetch('http://localhost:8000/api/client/new', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_name: trimmedName }),
+        body: JSON.stringify({
+          client_name: trimmedName,
+          location: trimmedLocation || null,
+          population: isNaN(parsedPopulation!) ? null : parsedPopulation,
+        }),
       });
 
       if (!res.ok) throw new Error('Failed to create client');
@@ -406,8 +414,10 @@ export default function PageOpp() {
       setClients((prev) => [...prev, createdClient]);
       setSelectedClientId(createdClient.client_id);
 
-      // Reset input state
+      // Reset all input states
       setNewClientName('');
+      setNewLocation('');
+      setNewPopulation('');
       setIsAdding(false);
     } catch (err) {
       console.error('Error creating client:', err);
@@ -449,6 +459,24 @@ export default function PageOpp() {
                 className={styles.add_client_input}
                 autoFocus
               />
+              
+              <input
+                type="text"
+                placeholder="Location (optional)..."
+                value={newLocation}
+                onChange={(e) => setNewLocation(e.target.value)}
+                className={styles.add_client_input}
+              />
+
+              <input
+                type="number"
+                placeholder="Population (optional)..."
+                value={newPopulation}
+                onChange={(e) => setNewPopulation(e.target.value)}
+                className={styles.add_client_input}
+                min="0"
+              />
+
               <div className={styles.add_client_actions}>
                 <button type="submit" className={styles.save_client_btn} disabled={!newClientName.trim()}>
                   Save
