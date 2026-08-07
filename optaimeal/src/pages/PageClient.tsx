@@ -87,7 +87,7 @@ export default function PageClient() {
   useEffect(() => {
     if (!clientId) return;
 
-    fetch(`http://localhost:8000/api/client/menu/current/${clientId}`)
+    fetch(`http://localhost:8000/api/client/${clientId}/assignments`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch menu for this client.");
         return res.json();
@@ -213,38 +213,38 @@ export default function PageClient() {
 
 
       <main className={styles.main_content}>
-        {activeView === 'main' && (
-          currentMeal ? (
-            <MainView 
-              meal={currentMeal.meal || currentMeal} 
-              unavailable={unavailableIngredients} 
-              onToggleIngredient={setUnavailableIngredients} 
-            />
-          ) : (
-            <div className={styles.empty_view_state}>
-              <h3>No Meal Selected</h3>
-              <p>Select a day from the sidebar to view scheduled meal details.</p>
-            </div>
-          )
-        )}
-
-        {activeView === 'chat' && (
-          <ChatView 
-            assignments={weeklyAssignment} 
-            selectedDay={selectedDay} 
-            onDaySelect={setSelectedDay}
+      {activeView === 'main' && (
+        currentMeal ? (
+          <MainView 
+            meal={currentMeal.meal || currentMeal} 
             unavailable={unavailableIngredients} 
             onToggleIngredient={setUnavailableIngredients} 
           />
-        )}
-
-        {activeView === 'calendar' && (
-          <div className={styles.view_card}>
-            <h2>Weekly Calendar View</h2>
-            <p className={styles.placeholder_text}>Calendar component coming soon.</p>
+        ) : (
+          <div className={styles.empty_view_state}>
+            <h3>No Meal Selected</h3>
+            <p>Select a day from the sidebar to view scheduled meal details.</p>
           </div>
-        )}
-      </main>
+        )
+      )}
+
+      {activeView === 'chat' && (
+        <ChatView 
+          assignments={weeklyAssignment} 
+          selectedDay={selectedDay} 
+          onDaySelect={setSelectedDay}
+          unavailable={unavailableIngredients} 
+          onToggleIngredient={setUnavailableIngredients} 
+        />
+      )}
+
+      {activeView === 'calendar' && (
+        <div className={styles.view_card}>
+          <h2>Weekly Calendar View</h2>
+          <p className={styles.placeholder_text}>Calendar component coming soon.</p>
+        </div>
+      )}
+    </main>
     </div>
   );
 
@@ -269,18 +269,16 @@ export default function PageClient() {
         )}
         
         <nav className={styles.top_sidebar}>
-          {['main', 'chat', 'calendar'].map((view) => {
-            const isActive = activeView === view;
-            return (
-              <button 
-                key={view} 
-                onClick={() => onViewChange(view)}
-                className={`${styles.top_sidebar_btn} ${isActive ? styles.active : ''}`}
-              >
-                {view.charAt(0).toUpperCase() + view.slice(1)}
-              </button>
-            );
-          })}
+          {['main', 'chat', 'calendar'].map((view) => (
+            <button 
+              key={view} 
+              onClick={() => onViewChange(view)}
+              className={styles.top_sidebar_btn}
+            >
+              {view.charAt(0).toUpperCase() + view.slice(1)}
+              
+            </button>
+          ))}
         </nav>
         
         <aside className={styles.mini_calendar}>
@@ -371,13 +369,16 @@ export default function PageClient() {
     );
   }
 
-function ChatView({ assignments, selectedDay, onDaySelect, unavailable, onToggleIngredient }: ChatViewProps) {    const [chatInput, setChatInput] = useState('');
+  function ChatView({ assignments = [], selectedDay, onDaySelect, unavailable = [], onToggleIngredient }: ChatViewProps) {
+    const [chatInput, setChatInput] = useState('');
     const [history, setHistory] = useState([{ sender: 'System', text: "Start chat" }]);
-    
+
     const toggle = (ing: string) => {
-      onToggleIngredient((prev: string[]) => 
-        prev.includes(ing) ? prev.filter(i => i !== ing) : [...prev, ing]
-      );
+      if (onToggleIngredient) {
+        onToggleIngredient((prev: string[]) => 
+          prev.includes(ing) ? prev.filter(i => i !== ing) : [...prev, ing]
+        );
+      }
     };
 
     const handleSendMessage = () => {
@@ -396,110 +397,143 @@ function ChatView({ assignments, selectedDay, onDaySelect, unavailable, onToggle
       setHistory([{ sender: 'System', text: "Yo" }]);
       setChatInput('');
     };
-    const currentMeal = assignments.find((m: any) => m.assignment_date === selectedDay);
-    const ingredientList = parseIngredients(currentMeal?.ingredients);
+
+    // 1. Safely find assignment (string casting prevents Date/string type mismatch)
+    const currentAssignment = assignments.find(
+      (m) => String(m.assignment_date) === String(selectedDay)
+    );
+
+    // Safe check using 'in' operator
+    const currentMeal = (currentAssignment && 'meal' in currentAssignment)
+      ? (currentAssignment as any).meal
+      : currentAssignment;
+
+    
+    // 3. Safely parse ingredients list
+    const rawIngredients = 
+      typeof currentMeal === 'object' && currentMeal !== null && 'ingredients' in currentMeal
+        ? currentMeal.ingredients
+        : undefined;
+
+    const ingredientList = parseIngredients(rawIngredients);
 
     return (
-      <div className ={styles.chat_wrapper}>
+      <div className={styles.chat_wrapper}>
+        {/* Left Column: Chat Window */}
         <div className={styles.chat_container}>
-                <header className={styles.chat_header}>
-                  <h2>Chat</h2>
-                  <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
-                </header>
+          <header className={styles.chat_header}>
+            <h2>Chat</h2>
+            <button className={styles.reset_chat_btn} onClick={handleReset}>Reset</button>
+          </header>
 
-                <div className={styles.chat_window}>
-                  {history.map((msg, index) => (
-                    <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
-                      <p><strong>{msg.sender}:</strong> {msg.text}</p>
-                    </div>
-                  ))}
+          <div className={styles.chat_window}>
+            {history.map((msg, index) => (
+              <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
+                <p><strong>{msg.sender}:</strong> {msg.text}</p>
+              </div>
+            ))}
+          </div>
+
+          <footer className={styles.chat_input_area}>
+            <input
+              type="text"
+              placeholder="Type meal feedback here..."
+              className={styles.chat_input_mock}
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()}
+            />
+            <button className={styles.send_btn} onClick={handleSendMessage}>
+              Send
+            </button>
+          </footer>
+        </div>
+
+        {/* Right Column: Meal Inspector & Ingredient Checklist */}
+        <div className={styles.meal_selector_box}>
+          <h3>Select Meal to Edit</h3>
+
+          {/* Day / Meal Selector Bar */}
+          <div className={styles.meal_btn_group}>
+            {assignments.map((m: any) => {
+              const isSelected = String(selectedDay) === String(m.assignment_date);
+              const mealObj = m.meal || m;
+              const buttonLabel = mealObj.meal_name || m.assignment_date;
+
+              return (
+                <button 
+                  key={m.assignment_date} 
+                  className={`${styles.chat_meal_btns} ${isSelected ? styles.active : ''}`}
+                  onClick={() => onDaySelect(m.assignment_date)}
+                >
+                  {buttonLabel}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Meal Detail Card */}
+          <div className={styles.meal_card}>
+            {currentMeal ? (
+              <>
+                <h3>{currentMeal.meal_name || "Untitled Meal"}</h3>
+
+                <div className={styles.meta_info}>
+                  <p><strong>Calories:</strong> {currentMeal.calories_per_serving ?? 'N/A'} kcal</p>
+                  <p><strong>Nutritional Score:</strong> {currentMeal.nutritional_score ?? 'N/A'}</p>
                 </div>
 
-                <footer className={styles.chat_input_area}>
-                  <input
-                    type="text"
-                    placeholder="Type meal feedback here..."
-                    className={styles.chat_input_mock}
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()}
-                  />
-                  <button className={styles.send_btn} onClick={handleSendMessage}>
-                    Send
-                  </button>
-                </footer>
+                <section className={styles.ingredients}>
+                  <h3>Ingredients Checklist</h3>
+                  <p><small>Mark unavailable items with an [X]</small></p>
 
-                
-              </div>
-              <div className={styles.meal_selector_box}>
-                  <h3>Select Meal to Edit</h3>
-                  {assignments.map((m) => (
-                    <button 
-                      className={styles.chat_meal_btns}
-                      key={m.assignment_date} 
-                      onClick={() => onDaySelect(m.assignment_date)}
-                    >
-                      {m.meal_name}
-                    </button>
-                  ))}
-                  <div className={styles.meal_card}>
-                    <section>
-                      <h3>{currentMeal?.meal_name}</h3>
-    
-                      <div className={styles.meta_info}>
-                        <p><strong>Calories:</strong> {currentMeal?.calories_per_serving || 'N/A'}</p>
-                        <p><strong>Estimated Cost:</strong> {"n/a"}</p>
-                      </div>
+                  {ingredientList.length > 0 ? (
+                    ingredientList.map((ing: MealIngredient | string, i: number) => {
+                      const isObject = typeof ing === 'object' && ing !== null;
+                      const ingName = isObject ? ing.ingredient_name : ing;
+                      const ingId = isObject ? ing.ingredient_id : i;
 
-                      
+                      const displayText = isObject
+                        ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
+                        : ing;
 
-                      <section className={styles.ingredients}>
-                    <h3>Ingredients Checklist</h3>
-                    <p><small>Mark unavailable items with an [X]</small></p>
-                    
-                    {ingredientList.length > 0 ? (
-                      ingredientList.map((ing: MealIngredient | string, i: number) => {
-                        // Extract name and display string safely (handles structured objects and legacy strings)
-                        const isObject = typeof ing === 'object' && ing !== null;
-                        const ingName = isObject ? ing.ingredient_name : ing;
-                        const ingId = isObject ? ing.ingredient_id : i;
-                        
-                        const displayText = isObject
-                          ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
-                          : ing;
+                      const isUnavailable = unavailable.includes(ingName) || unavailable.includes(ingId as any);
 
-                        // Check if ingredient name or ID is marked unavailable
-                        const isUnavailable = unavailable.includes(ingName) || unavailable.includes(ingId as any);
+                      return (
+                        <div 
+                          key={`${ingId}-${i}`} 
+                          onClick={() => toggle(ingName)}
+                          style={{ 
+                            cursor: 'pointer', 
+                            textDecoration: isUnavailable ? 'line-through' : 'none',
+                            color: isUnavailable ? '#ef4444' : 'inherit',
+                            marginBottom: '0.5rem',
+                            userSelect: 'none'
+                          }}
+                        >
+                          [{isUnavailable ? 'X' : ' '}] {displayText}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p style={{ color: '#888', fontStyle: 'italic' }}>No ingredients listed.</p>
+                  )}
+                </section>
 
-                        return (
-                          <div 
-                            key={`${ingId}-${i}`} 
-                            onClick={() => toggle(ingName)}
-                            style={{ 
-                              cursor: 'pointer', 
-                              textDecoration: isUnavailable ? 'line-through' : 'none',
-                              color: isUnavailable ? 'red' : 'inherit',
-                              marginBottom: '0.5rem'
-                            }}
-                          >
-                            [{isUnavailable ? 'X' : ' '}] {displayText}
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <p style={{ color: '#888', fontStyle: 'italic' }}>No ingredients listed.</p>
-                    )}
-                  </section>
-
-                    </section>
-                    <button
-                      className={styles.regenerate_btn}
-                      onClick={() => alert("Regenerate logic should be handled here or passed as a prop")}
-                    >
-                      Regenerate Meal
-                    </button>
-                  </div>
-              </div>
+                <button
+                  className={styles.regenerate_btn}
+                  onClick={() => alert("Regenerate meal logic triggered")}
+                >
+                  Regenerate Meal
+                </button>
+              </>
+            ) : (
+              <p style={{ color: '#888', fontStyle: 'italic', textAlign: 'center' }}>
+                Select a meal above to view details.
+              </p>
+            )}
+          </div>
+        </div>
       </div>
     );
   }

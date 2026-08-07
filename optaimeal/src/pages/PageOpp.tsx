@@ -352,6 +352,37 @@ export default function PageOpp() {
     }
   };
   
+  const [isAdding, setIsAdding] = useState(false);
+  const [newClientName, setNewClientName] = useState('');
+
+  const handleCreateClient = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmedName = newClientName.trim();
+    if (!trimmedName) return;
+
+    try {
+      const res = await fetch('http://localhost:8000/api/client/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_name: trimmedName }),
+      });
+
+      if (!res.ok) throw new Error('Failed to create client');
+
+      const createdClient: Client = await res.json();
+
+      // Update local state and select the new client
+      setClients((prev) => [...prev, createdClient]);
+      setSelectedClientId(createdClient.client_id);
+
+      // Reset input state
+      setNewClientName('');
+      setIsAdding(false);
+    } catch (err) {
+      console.error('Error creating client:', err);
+      alert('Could not add new client to database.');
+    }
+  };
 
   return (
     <div className={styles.opp_container}>
@@ -362,6 +393,59 @@ export default function PageOpp() {
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('calendar')}>Calendar</button>
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('saved')}>Saved</button>
         </nav>
+
+        {/*client list */}
+        <div className={styles.client_section}>
+          <div className={styles.client_section_header}>
+            <span>Clients</span>
+            <span className={styles.client_count}>{clients?.length ?? 0}</span>
+          </div>
+          <button 
+            className={styles.add_client_trigger}
+            onClick={() => setIsAdding(!isAdding)}
+            title="Add new client"
+          >
+            {isAdding ? '✕ Cancel' : '+ Add'}
+          </button>
+
+          {isAdding && (
+            <form className={styles.add_client_form} onSubmit={handleCreateClient}>
+              <input
+                type="text"
+                placeholder="Enter client name..."
+                value={newClientName}
+                onChange={(e) => setNewClientName(e.target.value)}
+                className={styles.add_client_input}
+                autoFocus
+              />
+              <div className={styles.add_client_actions}>
+                <button type="submit" className={styles.save_client_btn} disabled={!newClientName.trim()}>
+                  Save
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className={styles.client_list}>
+            {clients?.map((client) => {
+              const id = client.client_id ?? client.client_id;
+              const isSelected = selectedClientId === id;
+              
+              return (
+                <button
+                  key={id}
+                  className={`${styles.client_item} ${isSelected ? styles.client_item_active : ''}`}
+                  onClick={() => setSelectedClientId(id)}
+                >
+                  <div className={styles.client_info}>
+                    <span className={styles.client_name}>{client.client_name || `Client ${id}`}</span>
+                    <span className={styles.client_id}>ID: #{id}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </aside>
 
       <main className={styles.main_content}>

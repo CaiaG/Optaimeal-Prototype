@@ -336,6 +336,29 @@ def get_client_assignments(client_id: int, db: Session = Depends(database.get_db
 
     return result
 
+class ClientCreate(BaseModel):
+    client_name: str
+
+class ClientResponse(BaseModel):
+    client_id: int
+    client_name: str
+
+    class Config:
+        from_attributes = True  # Pydantic v2 (use orm_mode = True for v1)
+
+
+@app.post("/api/client/new", response_model=ClientResponse)
+def create_client(payload: ClientCreate, db: Session = Depends(database.get_db)):
+    if not payload.client_name.strip():
+        raise HTTPException(status_code=400, detail="Client name cannot be empty")
+
+    new_client = models.Client(client_name=payload.client_name.strip())
+    db.add(new_client)
+    db.commit()
+    db.refresh(new_client)
+
+    return new_client
+
 ### client routes ###
 
 #  Fetch the daily/weekly menu assigned to the authenticated client based on their id.
