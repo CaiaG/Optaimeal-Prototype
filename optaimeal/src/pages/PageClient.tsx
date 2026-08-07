@@ -78,6 +78,7 @@ export default function PageClient() {
   const [weeklyAssignment, setWeeklyAssignment] = useState<any[]>([]);
   const [selectedDay, setSelectedDay] = useState('Monday'); 
   const [unavailableIngredients, setUnavailableIngredients] = useState<string[]>([]);
+  const [numStudents, setNumStudents] = useState<number | ''>('');
 
   // Safely find the current meal with Array.isArray guard
   const currentMeal = Array.isArray(weeklyAssignment)
@@ -93,6 +94,9 @@ export default function PageClient() {
         return res.json();
       })
       .then((data) => {
+        if (data.client?.population != null) {
+          setNumStudents(data.client.population);
+        }
         // Build the 5-day Monday-Friday schedule
         const fullWeek = buildFullWeekSchedule(data);
         setWeeklyAssignment(fullWeek);
@@ -112,6 +116,9 @@ export default function PageClient() {
         setSelectedDay(emptyWeek[0].assignment_date);
       });
   }, [clientId]);
+
+  // update count
+  
 
   const buildFullWeekSchedule = (rawAssignments: any[]) => {
     const now = new Date();
@@ -169,6 +176,7 @@ export default function PageClient() {
       return;
     }
     setClientId(parsedId);
+    
     setIsClientModalOpen(false);
   };
 
@@ -305,6 +313,7 @@ export default function PageClient() {
     
     const ingredientsList = parseIngredients(meal?.ingredients);
 
+    
     return (
       <div className={styles.meal_details_view}>
          <div className={styles.meal_details_card}>
@@ -336,29 +345,55 @@ export default function PageClient() {
         </div>
 
         {/* Student Count / Servings Bar */}
-        <div className={styles.quantity_section}>
-          <section className={styles.quantity_section}>
-            <label>Nr of students: </label>
-            <input type="number" placeholder="q" />
-          </section>
-        </div>
+          <div className={styles.quantity_section}>
+            <label htmlFor="student_count">Nr of students: </label>
+            <input 
+              id="student_count"
+              type="number" 
+              placeholder="Enter number..." 
+              value={numStudents}
+              onChange={(e) => {
+                const val = e.target.value;
+                setNumStudents(val === '' ? '' : Math.max(1, parseInt(val, 10) || 0));
+              }}
+              onBlur={() => {
+                if (numStudents === '' || numStudents < 1) {
+                  setNumStudents(1);
+                }
+              }}
+              min="1"
+            />
+          </div>
 
-        {/* Ingredients Empty / Active State */}
-        <div className={styles.ingredients_list}>
-          <h4>Ingredients</h4>
+          {/* Ingredients List */}
+          <div className={styles.ingredients_list}>
+            <h4>Ingredients</h4>
             <ul>
               {ingredientsList.length > 0 ? (
-              ingredientsList.map((ing: MealIngredient | string, index: number) => {
-              const isObject = typeof ing === 'object' && ing !== null;
-              const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
-              const displayText = isObject
-              ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
-              : ing;
+                ingredientsList.map((ing: MealIngredient | string, index: number) => {
+                  const isObject = typeof ing === 'object' && ing !== null;
+                  const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
 
-              return <li key={key}>{displayText}</li>;
-              })
+                  // Fall back to 1 if numStudents is empty or 0
+                  const multiplier = typeof numStudents === 'number' && numStudents > 0 ? numStudents : 1;
+
+                  let displayText = '';
+
+                  if (isObject) {
+                    const baseQty = ing.quantity ?? 1;
+                    // Scale quantity and round cleanly to max 2 decimal places (avoids floats like 0.30000000004)
+                    const scaledQty = Number((baseQty * multiplier).toFixed(2));
+                    const unitStr = ing.unit ? `${ing.unit} ` : '';
+                    
+                    displayText = `${scaledQty} ${unitStr}${ing.ingredient_name}`.trim();
+                  } else {
+                    displayText = ing;
+                  }
+
+                  return <li key={key}>{displayText}</li>;
+                })
               ) : (
-              <li>No ingredients listed</li>
+                <li>No ingredients listed</li>
               )}
             </ul>
           </div>
