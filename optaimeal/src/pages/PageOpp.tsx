@@ -421,7 +421,7 @@ export default function PageOpp() {
 
 
 function HomeView({ 
-  meals, onNavigate, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat 
+  meals, onNavigate
 }: HomeViewProps) {
   const [addMode, setAddMode] = useState('button');
 
@@ -733,13 +733,13 @@ function GenerateView({
     setIsModalOpen(false);
   };
 
-  const rawIngredients = meal?.ingredients as unknown;
+  // const rawIngredients = meal?.ingredients as unknown;
 
-  const ingredientList: string[] = Array.isArray(rawIngredients)
-    ? rawIngredients
-    : typeof rawIngredients === 'string'
-    ? rawIngredients.split(',').map((item: string) => item.trim()).filter(Boolean)
-    : [];
+  // const ingredientList: string[] = Array.isArray(rawIngredients)
+  //   ? rawIngredients
+  //   : typeof rawIngredients === 'string'
+  //   ? rawIngredients.split(',').map((item: string) => item.trim()).filter(Boolean)
+  //   : [];
 
   
 
@@ -1100,13 +1100,13 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
       }
     }, [selectedClientId]);
 
-    const assignmentMap = useMemo(() => {
-      const map: Record<string, string> = {};
-      assignments.forEach((item) => {
-        map[item.assignment_date] = item.meal.meal_name;
-      });
-      return map;
-    }, [assignments]);
+    // const assignmentMap = useMemo(() => {
+    //   const map: Record<string, string> = {};
+    //   assignments.forEach((item) => {
+    //     map[item.assignment_date] = item.meal.meal_name;
+    //   });
+    //   return map;
+    // }, [assignments]);
     
   const handleSelectSavedMeal = (day: number, meal: MealPlan): void => {
     if (selectedClientId === null) return;

@@ -286,12 +286,8 @@ export default function PageClient() {
     );
   }
 
-  function MainView({ meal, unavailable, onToggleIngredient }: any) {
-    const toggle = (ing: string) => {
-      onToggleIngredient((prev: string[]) => 
-        prev.includes(ing) ? prev.filter(i => i !== ing) : [...prev, ing]
-      );
-    };
+  function MainView({ meal}: any) {
+    
     const ingredientsList = parseIngredients(meal?.ingredients);
 
     return (
@@ -313,25 +309,23 @@ export default function PageClient() {
         </section>
 
         <div className={styles.ingredients_list}>
-                        <h4>Ingredients</h4>
-                        <ul>
-                          {ingredientsList.length > 0 ? (
-                            ingredientsList.map((ing: MealIngredient | string, index: number) => {
-                              const isObject = typeof ing === 'object' && ing !== null;
-                              const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
-                              const displayText = isObject
-                                ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
-                                : ing;
+          <h4>Ingredients</h4>
+            <ul>
+              {ingredientsList.length > 0 ? (
+              ingredientsList.map((ing: MealIngredient | string, index: number) => {
+              const isObject = typeof ing === 'object' && ing !== null;
+              const key = isObject && ing.ingredient_id ? `${ing.ingredient_id}-${index}` : index;
+              const displayText = isObject
+              ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
+              : ing;
 
-                              return <li key={key}>{displayText}</li>;
-                            })
-                          ) : (
-                            <li>No ingredients listed</li>
-                          )}
-                        </ul>
-                      </div>
-
-        
+              return <li key={key}>{displayText}</li>;
+              })
+              ) : (
+              <li>No ingredients listed</li>
+              )}
+            </ul>
+          </div>
       </div>
     );
   }
