@@ -263,6 +263,12 @@ export default function PageOpp() {
   const handleAssignToClient = async (clientId: number | null, date: string) => {
     if (!clientId) return;
 
+    const todayStr = new Date().toLocaleDateString('en-CA'); 
+      if (date <= todayStr) {
+        alert('Meals can only be assigned to future dates.');
+        return;
+      }
+
     const currentMealId = await handleSaveDraft(false);
     if (!currentMealId) return;
 

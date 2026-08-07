@@ -91,7 +91,7 @@ class ClientAssignmentResponse(BaseModel):
     client_id: int
     assignment_date: str
     meal: MealDetailResponse
-    
+
 class ClientCreate(BaseModel):
     client_name: str
     location: Optional[str] = None
@@ -130,50 +130,27 @@ def format_meal(meal: models.Meal) -> dict:
         "ingredients": ingredients_list,
     }
 
-def parse_ingredients_from_db(raw_ingredients) -> List[dict]:
-    """Safely parses DB string/JSON column into structured ingredient dicts."""
-    if not raw_ingredients:
-        return []
-    
-    if isinstance(raw_ingredients, list):
-        return raw_ingredients
-
-    if isinstance(raw_ingredients, str):
-        trimmed = raw_ingredients.strip()
-        if not trimmed:
-            return []
-        
-        # Parse JSON stringified array
-        if trimmed.startswith("[") or trimmed.startswith("{"):
-            try:
-                parsed = json.loads(trimmed)
-                return parsed if isinstance(parsed, list) else [parsed]
-            except Exception:
-                pass
-        
-        # Legacy fallback: CSV string (e.g. "Lentils, Carrots")
-        return [
-            {
-                "ingredient_id": i + 1,
-                "ingredient_name": name.strip(),
-                "quantity": 1.0,
-                "unit": "unit"
-            }
-            for i, name in enumerate(trimmed.split(",")) if name.strip()
-        ]
-
-    return []
-
 def format_meal_dict(meal: models.Meal) -> dict:
-    """Formats a Meal model into a dict matching MealOut response shape."""
+    ingredients_list = []
+    
+    for mi in meal.meal_ingredients:
+        ing_name = mi.ingredient.ingredient_name if mi.ingredient else "Unnamed Ingredient"
+        ingredients_list.append({
+            "ingredient_id": mi.ingredient_id,
+            "ingredient_name": ing_name,
+            "quantity": mi.ingredient_quantity,
+            "unit": mi.unit,
+        })
+    
     return {
         "meal_id": meal.meal_id,
         "meal_name": meal.meal_name,
+        "status": meal.status,
         "calories_per_serving": meal.calories_per_serving,
         "nutritional_score": meal.nutritional_score,
-        "status": meal.status,
-        "ingredients": parse_ingredients_from_db(meal.ingredients),
+        "ingredients": ingredients_list,
     }
+
 
 @app.get("/")
 def read_root():
@@ -362,7 +339,6 @@ def get_all_meals(db: Session = Depends(database.get_db)):
 # post new meal without a given id
 @app.post("/api/meal", response_model=MealOut)
 def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
-    # 1. Save Parent Meal
     new_meal = models.Meal(
         meal_name=meal_data.meal_name,
         status=meal_data.status,
@@ -372,11 +348,9 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
     db.add(new_meal)
     db.flush()  # Assigns meal_id before committing
 
-    # 2. Insert Join Records into MealIngredients
     for item in meal_data.ingredients:
         ing_id = item.ingredient_id
 
-        # Fallback: if ingredient_id is missing, find or create the ingredient by name
         if not ing_id and item.ingredient_name:
             db_ing = db.query(models.Ingredient).filter(
                 models.Ingredient.ingredient_name == item.ingredient_name.strip()

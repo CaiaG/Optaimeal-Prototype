@@ -10,7 +10,7 @@ class Meal(Base):
     status = Column(String, default="Draft")
     calories_per_serving = Column(Float)
     nutritional_score = Column(Float)
-
+    # price_per_serving
     meal_ingredients = relationship(
         "MealIngredients",
         back_populates="meal",
