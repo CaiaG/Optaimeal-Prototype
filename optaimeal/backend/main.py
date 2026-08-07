@@ -46,11 +46,6 @@ class MealOut(BaseModel):
     class Config:
         from_attributes = True
 
-class MenuAssignmentRequest(BaseModel):
-    meal_id: int
-    client_id: int
-    assignment_date: str
-
 
 def serialize_ingredients(ingredients: List[MealIngredientItem]) -> str:
     """Converts structured ingredients list into a JSON string for DB storage."""
@@ -122,16 +117,15 @@ def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
 def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(database.get_db)):
     existing_meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
 
+    if not existing_meal:
+            raise HTTPException(status_code=404, detail="Meal not found")
+    
     if existing_meal.status == "Archived":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Archived meals are locked and cannot be edited."
         )
-
-    
-    if not existing_meal:
-        raise HTTPException(status_code=404, detail="Meal not found")
-    
+  
     existing_meal.meal_name = meal_data.meal_name
     existing_meal.status = meal_data.status
     existing_meal.calories_per_serving = meal_data.calories_per_serving
@@ -350,16 +344,22 @@ class ClientResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+# post new client
 @app.post("/api/client/new", response_model=ClientResponse)
 def create_client(payload: ClientCreate, db: Session = Depends(database.get_db)):
+
     if not payload.client_name.strip():
         raise HTTPException(status_code=400, detail="Client name cannot be empty")
 
-    new_client = models.Client(client_name=payload.client_name.strip())
+    new_client = models.Client(
+            client_name=payload.client_name,
+            location=payload.location,
+            population=payload.population
+        )
     db.add(new_client)
     db.commit()
     db.refresh(new_client)
-
     return new_client
 
 ### client routes ###
@@ -451,16 +451,4 @@ def get_all_clients(db: Session = Depends(database.get_db)):
     clients = db.query(models.Client).all()
     return clients
 
-
-# Create a new client
-@app.post("/api/clients", response_model=ClientResponse)
-def create_client(client_data: ClientCreate, db: Session = Depends(database.get_db)):
-    new_client = models.Client(
-        client_name=client_data.client_name,
-        location=client_data.location,
-        population=client_data.population
-    )
-    db.add(new_client)
-    db.commit()
-    db.refresh(new_client)
-    return new_client
+    

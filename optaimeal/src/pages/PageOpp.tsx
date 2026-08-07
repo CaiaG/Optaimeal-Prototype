@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient} from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient, parseIngredients} from './types/mealplan';
+import { apiFetch } from '../services/api';
 
 // --- Types & Interfaces ---
 
@@ -49,65 +50,7 @@ interface SavedViewProps {
 }
 
 
-export const parseIngredients = (
-  ingredients: MealIngredient[] | string[] | string | undefined | null
-): MealIngredient[] => {
-  if (!ingredients) return [];
 
-  let raw: any[] = [];
-
-  // 1. Parse string inputs (JSON stringified array OR comma-separated string)
-  if (typeof ingredients === 'string') {
-    const trimmed = ingredients.trim();
-    if (!trimmed) return [];
-
-    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        raw = Array.isArray(parsed) ? parsed : [parsed];
-      } catch {
-        // Fallback to CSV split if JSON parsing fails
-        raw = trimmed.split(',').map((s) => s.trim());
-      }
-    } else {
-      raw = trimmed.split(',').map((s) => s.trim());
-    }
-  } else if (Array.isArray(ingredients)) {
-    raw = ingredients;
-  }
-
-  // 2. Normalize every item into a valid MealIngredient object
-  return raw
-    .map((item, index) => {
-      if (!item) return null;
-
-      // Already structured MealIngredient object
-      if (typeof item === 'object') {
-        return {
-          ingredient_id: item.ingredient_id ?? index + 1,
-          ingredient_name: item.ingredient_name || item.name || 'Unknown Ingredient',
-          quantity: Number(item.quantity) || 1,
-          unit: item.unit || 'unit',
-        };
-      }
-
-      // Legacy string element (e.g., "Lentils")
-      if (typeof item === 'string') {
-        const str = item.trim();
-        if (!str) return null;
-
-        return {
-          ingredient_id: index + 1,
-          ingredient_name: str,
-          quantity: 1,
-          unit: 'unit',
-        };
-      }
-
-      return null;
-    })
-    .filter((item): item is MealIngredient => item !== null);
-};
 
 // --- Main Application Component ---
 export default function PageOpp() {
@@ -129,40 +72,43 @@ export default function PageOpp() {
   const [savedMealId, setSavedMealId] = useState<number | null>(null);
 
   useEffect(() => {
+    const loadInitialData = async () => {
+      // 1. Fetch Meals
+      try {
+        const mealsData = await apiFetch<MealPlan[]>('/api/meals');
+        setMeals(mealsData);
+      } catch (err) {
+        console.error('Error fetching meals:', err);
+        setMeals([]);
+      }
 
-    fetch('http://localhost:8000/api/meals')
-      .then((res) => res.ok ? res.json() : [])
-      .then((data: MealPlan[]) => setMeals(data))
-      .catch((err) => console.error('Error fetching meals:', err));
-
-
-    fetch('http://localhost:8000/api/clients')
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch clients');
-        return res.json();
-      })
-      .then((data: Client[]) => {
-        // Normalize name / client_name property if necessary
-        const normalized = data.map((c) => ({
+      // 2. Fetch Clients
+      try {
+        const clientsData = await apiFetch<Client[]>('/api/clients');
+        const normalized = clientsData.map((c) => ({
           ...c,
           client_name: c.client_name || `Client #${c.client_id}`,
         }));
         setClients(normalized);
-      })
-      .catch((err) => console.error('Error fetching clients:', err))
-      .finally(() => setIsLoadingClients(false));
+      } catch (err) {
+        console.error('Error fetching clients:', err);
+      } finally {
+        setIsLoadingClients(false);
+      }
 
-      fetch('http://localhost:8000/api/ingredients')
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data) => {
-          const list = Array.isArray(data) ? data : data.ingredients || [];
-          setAvailableIngredients(list);
-        })
-        .catch((err) => {
-          console.error('Error fetching ingredients:', err);
-          setAvailableIngredients([]); // Default to empty array on error
-        });
-    }, []);
+      // 3. Fetch Ingredients
+      try {
+        const data = await apiFetch<any>('/api/ingredients');
+        const list = Array.isArray(data) ? data : data.ingredients || [];
+        setAvailableIngredients(list);
+      } catch (err) {
+        console.error('Error fetching ingredients:', err);
+        setAvailableIngredients([]);
+      }
+    };
+
+    loadInitialData();
+  }, []);
 
   // --- Handlers ---
   const handleNavigation = (view: string, meal: MealPlan | null = null) => {
@@ -249,10 +195,10 @@ export default function PageOpp() {
   const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
     if (!selectedMeal) return null;
 
-    const isExistingMeal = Boolean(selectedMeal.meal_id); 
-    const endpoint = isExistingMeal 
-      ? `http://localhost:8000/api/meal/${selectedMeal.meal_id}`
-      : "http://localhost:8000/api/meal";
+    const isExistingMeal = Boolean(selectedMeal.meal_id);
+    const endpoint = isExistingMeal
+      ? `/api/meal/${selectedMeal.meal_id}`
+      : '/api/meal';
 
     const method = isExistingMeal ? 'PUT' : 'POST';
 
@@ -262,19 +208,19 @@ export default function PageOpp() {
           ingredient_id: null,
           ingredient_name: ing.trim(),
           quantity: 1.0,
-          unit: 'unit'
+          unit: 'unit',
         };
       }
       return {
         ingredient_id: ing.ingredient_id ?? null,
         ingredient_name: ing.ingredient_name || ing.name || 'Unnamed Ingredient',
         quantity: Number(ing.quantity) || 1.0,
-        unit: ing.unit || 'unit'
+        unit: ing.unit || 'unit',
       };
     });
 
     const payload = {
-      meal_name: selectedMeal.meal_name || "Untitled Meal",
+      meal_name: selectedMeal.meal_name || 'Untitled Meal',
       status: selectedMeal.status || 'Draft',
       ingredients: sanitizedIngredients,
       calories_per_serving: Number(selectedMeal.calories_per_serving) || 0.0,
@@ -282,24 +228,15 @@ export default function PageOpp() {
     };
 
     try {
-      const response = await fetch(endpoint, {
+      const savedMeal = await apiFetch<MealPlan>(endpoint, {
         method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
-      if (!response.ok) {
-        // ✅ Log exact Pydantic validation error details if 422 occurs
-        const errorData = await response.json().catch(() => ({}));
-        console.error("Server 422 Validation Detail:", errorData);
-        throw new Error(errorData.detail ? JSON.stringify(errorData.detail) : `Status ${response.status}`);
-      }
+      const assignedId = savedMeal.meal_id || selectedMeal.meal_id;
 
-      const savedMeal = await response.json();
-      const assignedId = savedMeal.meal_id || selectedMeal.meal_id; 
-
-      const updatedIngredients = savedMeal.ingredients 
-        ? parseIngredients(savedMeal.ingredients) 
+      const updatedIngredients = savedMeal.ingredients
+        ? parseIngredients(savedMeal.ingredients)
         : sanitizedIngredients;
 
       const updatedMealState: MealPlan = {
@@ -313,11 +250,11 @@ export default function PageOpp() {
       setSelectedMeal(updatedMealState);
 
       if (showAlert) {
-        alert("Draft saved successfully!");
+        alert('Draft saved successfully!');
       }
       return assignedId;
     } catch (e: any) {
-      console.error("Save failed:", e);
+      console.error('Save failed:', e);
       alert(`Failed to save draft: ${e.message}`);
       return null;
     }
@@ -331,31 +268,27 @@ export default function PageOpp() {
     if (!currentMealId) return;
 
     try {
-      const response = await fetch('http://localhost:8000/api/operator/menu/assign', {
+      const data = await apiFetch<{ message?: string }>('/api/operator/menu/assign', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           meal_id: currentMealId,
           client_id: clientId,
-          assignment_date: date
-        })
+          assignment_date: date,
+        }),
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Failed to assign meal.");
-
-      alert(data.message || "Meal assigned successfully!");
+      alert(data.message || 'Meal assigned successfully!');
 
       // Update active meal state
       setSelectedMeal((prev) => (
-        prev ? { ...prev, status: "Active", assignment_date: date } : null
+        prev ? { ...prev, status: 'Active', assignment_date: date } : null
       ));
 
       // Keep global meals list in sync
       setMeals((prevMeals) =>
         prevMeals.map((m) =>
           m.meal_id === currentMealId
-            ? { ...m, status: "Active", assignment_date: date }
+            ? { ...m, status: 'Active', assignment_date: date }
             : m
         )
       );
@@ -366,15 +299,11 @@ export default function PageOpp() {
 
   const handleCreateNewIngredient = async (ingredientName: string): Promise<MasterIngredient | null> => {
     try {
-      const res = await fetch('http://localhost:8000/api/ingredients', {
+      const created = await apiFetch<MasterIngredient>('/api/ingredients', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ingredient_name: ingredientName.trim() }),
       });
 
-      if (!res.ok) throw new Error('Failed to create ingredient');
-
-      const created: MasterIngredient = await res.json();
       setAvailableIngredients((prev) => [...prev, created]);
       return created;
     } catch (err) {
@@ -396,19 +325,14 @@ export default function PageOpp() {
     const parsedPopulation = newPopulation !== '' ? parseInt(newPopulation, 10) : null;
 
     try {
-      const res = await fetch('http://localhost:8000/api/client/new', {
+      const createdClient = await apiFetch<Client>('/api/client/new', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           client_name: trimmedName,
           location: trimmedLocation || null,
-          population: isNaN(parsedPopulation!) ? null : parsedPopulation,
+          population: Number.isNaN(parsedPopulation as any) ? null : parsedPopulation,
         }),
       });
-
-      if (!res.ok) throw new Error('Failed to create client');
-
-      const createdClient: Client = await res.json();
 
       // Update local state and select the new client
       setClients((prev) => [...prev, createdClient]);
@@ -1234,12 +1158,10 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
   const fetchClientAssignments = async (clientId: number) => {
     setLoading(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/client/${clientId}/assignments`);
-      if (!res.ok) throw new Error("Failed to fetch assignments");
-      const data = await res.json();
+      const data = await apiFetch<any>(`/api/client/${clientId}/assignments`);
       setAssignments(data);
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching assignments:', err);
     } finally {
       setLoading(false);
     }

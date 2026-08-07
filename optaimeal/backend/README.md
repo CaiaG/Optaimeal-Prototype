@@ -1,16 +1,40 @@
-Optaimeal Prototype 1
+# OPTAIMEAL Prototype 1
 
-System Prerequisites: Python 3, Node.js
+## System Prerequisites
+- Python 3.10+
+- Node.js 18+
 
-Backend Setup (Python/FastAPI)
-- Navigate to the backend directory:
-- Create and activate a virtual environment:
-- Create: python -m venv venv
-- Activate (Windows): venv\Scripts\activate
-- Install dependencies
-- Launch the server: generates the optaimeal.db SQLite file in backend folder
+## Backend Setup (Python / FastAPI)
 
-Frontend Setup (React)
-- Navigate to the root directory
-- Install Node packages
-- Start the application
+```bash
+cd backend
+
+# Create a virtual environment
+python -m venv venv
+
+# Activate it
+venv\Scripts\activate      # Windows
+source venv/bin/activate   # macOS / Linux
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Launch the server (auto-restarts on code changes)
+uvicorn main:app --reload
+```
+
+The backend runs at `http://localhost:8000`. On first launch it creates `optaimeal.db` (SQLite) in the `backend/` folder — no separate DB setup needed. Interactive API docs are available at `http://localhost:8000/docs`.
+
+## Frontend Setup (React)
+
+```bash
+# From the project root
+npm install
+npm run dev
+```
+
+The frontend runs at `http://localhost:5173` and expects the backend to already be running at `http://localhost:8000`.
+
+## Notes
+- Start the backend before the frontend, since the frontend fetches data on load.
+- The SQLite file is gitignored; delete `backend/optaimeal.db` to reset all data.
