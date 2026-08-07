@@ -211,14 +211,23 @@ export default function PageClient() {
         </div>
       )}
 
+
       <main className={styles.main_content}>
-        {activeView === 'main' && currentMeal && (
-          <MainView 
-            meal={currentMeal.meal || currentMeal} 
-            unavailable={unavailableIngredients} 
-            onToggleIngredient={setUnavailableIngredients} 
-          />
+        {activeView === 'main' && (
+          currentMeal ? (
+            <MainView 
+              meal={currentMeal.meal || currentMeal} 
+              unavailable={unavailableIngredients} 
+              onToggleIngredient={setUnavailableIngredients} 
+            />
+          ) : (
+            <div className={styles.empty_view_state}>
+              <h3>No Meal Selected</h3>
+              <p>Select a day from the sidebar to view scheduled meal details.</p>
+            </div>
+          )
         )}
+
         {activeView === 'chat' && (
           <ChatView 
             assignments={weeklyAssignment} 
@@ -228,7 +237,13 @@ export default function PageClient() {
             onToggleIngredient={setUnavailableIngredients} 
           />
         )}
-        {activeView === 'calendar' && <p>Calendar Placeholder</p>}
+
+        {activeView === 'calendar' && (
+          <div className={styles.view_card}>
+            <h2>Weekly Calendar View</h2>
+            <p className={styles.placeholder_text}>Calendar component coming soon.</p>
+          </div>
+        )}
       </main>
     </div>
   );
@@ -254,16 +269,18 @@ export default function PageClient() {
         )}
         
         <nav className={styles.top_sidebar}>
-          {['main', 'chat', 'calendar'].map((view) => (
-            <button 
-              key={view} 
-              onClick={() => onViewChange(view)}
-              className={styles.top_sidebar_btn}
-            >
-              {view.charAt(0).toUpperCase() + view.slice(1)}
-              
-            </button>
-          ))}
+          {['main', 'chat', 'calendar'].map((view) => {
+            const isActive = activeView === view;
+            return (
+              <button 
+                key={view} 
+                onClick={() => onViewChange(view)}
+                className={`${styles.top_sidebar_btn} ${isActive ? styles.active : ''}`}
+              >
+                {view.charAt(0).toUpperCase() + view.slice(1)}
+              </button>
+            );
+          })}
         </nav>
         
         <aside className={styles.mini_calendar}>
@@ -292,22 +309,43 @@ export default function PageClient() {
 
     return (
       <div className={styles.meal_details_view}>
-        <header>
-          {/* Fallback to meal.day_name if assignment_date parsing fails on empty days */}
-          {meal.assignment_date 
-            ? new Date(meal.assignment_date).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }) 
-            : meal.day_name} 
-          - {meal.assignment_date}
-          <h2>{meal.meal_name}</h2>
-        </header>
-        
-        <section className={styles.stats_box}> stats section</section>
-        
-        <section className={styles.quantity_section}>
-          <label>Nr of students: </label>
-          <input type="number" placeholder="q" />
-        </section>
+         <div className={styles.meal_details_card}>
+        {/* Header */}
+        <div className={styles.header_section}>
+          <span className={styles.date_badge}>Monday, Aug 3, 2026</span>
+          <h2 className={styles.meal_title}>
+            {meal?.meal_name || "No Meal Assigned"}
+          </h2>
+        </div>
 
+        {/* Stats Grid */}
+        <div className={styles.stats_box}>
+          <div className={styles.stat_item}>
+            <span className={styles.stat_label}>CALORIES / SERVING</span>
+            <div className={styles.stat_value_container}>
+              <span className={styles.stat_value}>{meal?.calories_per_serving ?? 0}</span>
+              <span className={styles.stat_unit}>kcal</span>
+            </div>
+          </div>
+
+          <div className={styles.stat_item}>
+            <span className={styles.stat_label}>NUTRITIONAL SCORE</span>
+            <div className={styles.stat_value_container}>
+              <span className={styles.stat_value}>{meal?.nutritional_score ?? 0}</span>
+              <span className={styles.stat_unit}>/ 10</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Student Count / Servings Bar */}
+        <div className={styles.quantity_section}>
+          <section className={styles.quantity_section}>
+            <label>Nr of students: </label>
+            <input type="number" placeholder="q" />
+          </section>
+        </div>
+
+        {/* Ingredients Empty / Active State */}
         <div className={styles.ingredients_list}>
           <h4>Ingredients</h4>
             <ul>
@@ -326,7 +364,10 @@ export default function PageClient() {
               )}
             </ul>
           </div>
+        </div>    
       </div>
+
+      
     );
   }
 
