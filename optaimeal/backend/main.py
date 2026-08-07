@@ -338,14 +338,17 @@ def get_client_assignments(client_id: int, db: Session = Depends(database.get_db
 
 class ClientCreate(BaseModel):
     client_name: str
+    location: Optional[str] = None
+    population: Optional[int] = None
 
 class ClientResponse(BaseModel):
     client_id: int
     client_name: str
+    location: Optional[str] = None  
+    population: Optional[int] = None 
 
     class Config:
-        from_attributes = True  # Pydantic v2 (use orm_mode = True for v1)
-
+        from_attributes = True
 
 @app.post("/api/client/new", response_model=ClientResponse)
 def create_client(payload: ClientCreate, db: Session = Depends(database.get_db)):
@@ -441,20 +444,6 @@ def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
     }
 
     return optimized_suggestion
-
-class ClientCreate(BaseModel):
-    client_name: str
-    location: str
-    population: int
-
-class ClientResponse(BaseModel):
-    client_id: int
-    client_name: str
-    location: str
-    population: int
-
-    class Config:
-        from_attributes = True
 
 # Fetch all clients (used for dropdowns/modals in frontend)
 @app.get("/api/clients", response_model=List[ClientResponse])

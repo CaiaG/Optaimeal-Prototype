@@ -643,7 +643,7 @@ function HomeView({
           </div>
         )}
 
-        {meals.map((meal: MealPlan) => (
+        {meals.slice(0, 6).map((meal: MealPlan) => (
           <div 
             key={meal.meal_id} 
             className={styles.meal_card}          
@@ -655,7 +655,7 @@ function HomeView({
               <span>{meal.calories_per_serving} kcal</span>
             </div>
           </div>
-        ))}            
+        ))}     
       </section>
       
       {/* 2. Menu Comparison Section */}
