@@ -33,27 +33,42 @@ export default function PageClient() {
 
   const buildFullWeekSchedule = (rawAssignments: any[]) => {
     const now = new Date();
+    
+    // Zero out time components to prevent DST / hour rollover issues
+    now.setHours(0, 0, 0, 0);
+
     const currentDayOfWeek = now.getDay();
 
-    // Calculate Monday's date for current week
+    // Calculate Monday's date for the current week
     const distanceToMon = currentDayOfWeek === 0 ? -6 : 1 - currentDayOfWeek;
     const monday = new Date(now);
     monday.setDate(now.getDate() + distanceToMon);
 
     const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-    const assignmentsArray = Array.isArray(rawAssignments) ? rawAssignments : [rawAssignments];
+
+    // Handle null/undefined input safely
+    const assignmentsArray = Array.isArray(rawAssignments)
+      ? rawAssignments
+      : rawAssignments
+      ? [rawAssignments]
+      : [];
 
     return dayNames.map((dayName, index) => {
       const dayDate = new Date(monday);
       dayDate.setDate(monday.getDate() + index);
 
-      // Format date as YYYY-MM-DD
-      const dateKey = dayDate.toISOString().split('T')[0];
+      // Format date reliably as YYYY-MM-DD in LOCAL time (prevents UTC date shift)
+      const dateKey = dayDate.toLocaleDateString('en-CA');
 
-      // Check if backend has an assignment for this date or day name
-      const existing = assignmentsArray.find(
-        (item) => item && (item.assignment_date === dateKey || item.assignment_date === dayName)
-      );
+      // Match assignment against dateKey or dayName (handles ISO timestamps like "2026-08-10T00:00:00")
+      const existing = assignmentsArray.find((item) => {
+        if (!item) return false;
+        const itemDateStr = typeof item.assignment_date === 'string' 
+          ? item.assignment_date.split('T')[0] 
+          : item.assignment_date;
+
+        return itemDateStr === dateKey || item.assignment_date === dayName;
+      });
 
       if (existing) {
         const mealDetails = existing.meal || existing;
@@ -64,7 +79,6 @@ export default function PageClient() {
           assignment_date: dateKey,
           day_name: dayName,
           isAssigned: true,
-          // Keeps nested .meal object populated for components expecting item.meal
           meal: {
             ...mealDetails,
             assignment_date: dateKey,
@@ -72,7 +86,7 @@ export default function PageClient() {
         };
       }
 
-      // Blank placeholder
+      // Blank placeholder for unassigned days
       return {
         assignment_date: dateKey,
         day_name: dayName,
@@ -80,6 +94,7 @@ export default function PageClient() {
         meal_name: 'No Meal Assigned',
         status: 'Unassigned',
         calories_per_serving: 0,
+        price_per_serving: 0,
         nutritional_score: 0,
         ingredients: [],
         isAssigned: false,
@@ -92,7 +107,7 @@ export default function PageClient() {
     setClientError('');
 
     const parsedId = Number(inputClientId);
-    if (!parsedId || isNaN(parsedId)) {
+    if (!inputClientId || Number.isNaN(parsedId) || parsedId <= 0) {
       setClientError('Please enter a valid numeric Client ID');
       return;
     }
@@ -111,8 +126,10 @@ export default function PageClient() {
       setWeeklyAssignment(fullWeek);
 
       if (fullWeek.length > 0) {
-        const todayKey = new Date().toISOString().split('T')[0];
+        // Use local date string matching buildFullWeekSchedule ('YYYY-MM-DD')
+        const todayKey = new Date().toLocaleDateString('en-CA');
         const todayMatch = fullWeek.find((d) => d.assignment_date === todayKey);
+        
         setSelectedDay(todayMatch ? todayMatch.assignment_date : fullWeek[0].assignment_date);
       }
 
@@ -120,7 +137,7 @@ export default function PageClient() {
       setIsClientModalOpen(false);
     } catch (err: any) {
       console.error("Error fetching menu:", err);
-      setClientError('Client ID not found. Please check and try again.');
+      setClientError(err?.message || 'Client ID not found. Please check and try again.');
     } finally {
       setIsSubmitting(false);
     }

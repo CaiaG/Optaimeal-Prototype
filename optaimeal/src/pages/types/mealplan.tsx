@@ -3,52 +3,71 @@ export type MealStatus = 'Draft' | 'Active' | 'Archived';
 export interface MealPlan {
   meal_id: number | null;
   meal_name: string;
-  // recipe_id: number | null;
+  
+  category?: string | null;
   status: MealStatus;
   calories_per_serving: number;
   nutritional_score: number;
+  price_per_serving: number;
   ingredients: MealIngredient[];
   assignment_date: string;
 }
 
-
-
 export const createEmptyMeal = (): MealPlan => ({
   meal_id: null,
   meal_name: "",
-  // recipe_id: null,
+ 
+  category: "",
   status: "Draft",
   calories_per_serving: 0,
   nutritional_score: 0,
+  price_per_serving: 0,
   ingredients: [],
   assignment_date: ""
 });
 
-
-
-export interface Client {
-  client_id: number;
-  client_name: string;
-  // location?: string;
-  // population?: number;
-}
-
-export interface Assignment {
-  client_id: number;
-  assignment_date: string; // YYYY-MM-DD format
-  meal: MealPlan;
+export interface CreateIngredientPayload {
+  ingredient_name: string;
+  category?: string | null;
+  price_per_unit?: number | null;
+  unit?: string | null;
+  location?: string | null;
+  season?: string | null;
+  availability?: string | null;
+  substitutes?: string[];
 }
 
 export interface MasterIngredient {
   ingredient_id: number;
   ingredient_name: string;
-  default_unit?: string;
-  calories_per_unit?: number;
+  category?: string | null;
+  price_per_unit?: number | null;
+  unit?: string | null;
+  location?: string | null;
+  season?: string | null;
+  availability?: string | null;
+  substitutes?: string[];
+}
+
+export interface Client {
+  client_id: number;
+  client_name: string;
+  contact_email?: string | null;
+  location?: string | null;
+  population?: number | null;
+}
+
+export interface Assignment {
+  client_id: number;
+  assignment_date: string; // YYYY-MM-DD format
+  status?: string;
+  price_per_serving?: number;
+  meal: MealPlan;
 }
 
 // Line item attached to a specific meal draft
 export interface MealIngredient {
-  ingredient_id: number;
+  ingredient_id: number | null;
   ingredient_name: string;
   quantity: number;
   unit: string;
@@ -86,12 +105,13 @@ export const parseIngredients = (
     .map((item, index) => {
       if (!item) return null;
 
-      // Already structured MealIngredient object
+      // Structured MealIngredient object (handles both quantity & ingredient_quantity keys)
       if (typeof item === 'object') {
+        const quantityVal = item.quantity ?? item.ingredient_quantity;
         return {
-          ingredient_id: item.ingredient_id ?? index + 1,
+          ingredient_id: item.ingredient_id ?? null,
           ingredient_name: item.ingredient_name || item.name || 'Unknown Ingredient',
-          quantity: Number(item.quantity) || 1,
+          quantity: quantityVal !== undefined && quantityVal !== null ? Number(quantityVal) : 1,
           unit: item.unit || 'unit',
         };
       }
@@ -102,7 +122,7 @@ export const parseIngredients = (
         if (!str) return null;
 
         return {
-          ingredient_id: index + 1,
+          ingredient_id: null,
           ingredient_name: str,
           quantity: 1,
           unit: 'unit',

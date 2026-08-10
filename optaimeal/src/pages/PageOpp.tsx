@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient, parseIngredients} from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient, type CreateIngredientPayload} from './types/mealplan';
 import { apiFetch } from '../services/api';
 
 // --- Types & Interfaces ---
@@ -168,31 +168,31 @@ export default function PageOpp() {
   };
 
   
-  // 1. Save Draft & Update Local Meals List
+ // 1. Save Draft & Update Local Meals List
   const handleSaveAndUpdateFrontend = async () => {
-    const savedId = await handleSaveDraft();
-    if (!savedId || !selectedMeal) return;
+    // handleSaveDraft returns the freshly saved MealPlan object directly
+    const savedMeal = await handleSaveDraft();
+    if (!savedMeal) return;
 
     setMeals((prevMeals) => {
-      const mealToSave: MealPlan = { 
-        ...selectedMeal, 
-        meal_id: savedId, 
-        status: selectedMeal.status || 'Draft'
-      };
+      const existingIndex = prevMeals.findIndex(
+        (m) => m.meal_id === savedMeal.meal_id
+      );
 
-      const existingIndex = prevMeals.findIndex((m) => m.meal_id === savedId);
       if (existingIndex >= 0) {
         const updatedMeals = [...prevMeals];
-        updatedMeals[existingIndex] = mealToSave;
+        updatedMeals[existingIndex] = savedMeal;
         return updatedMeals;
       }
-      
-      return [...prevMeals, mealToSave];
+
+      return [...prevMeals, savedMeal];
     });
   };
 
   // 2. Persist Meal Draft to Backend API
-  const handleSaveDraft = async (showAlert = true): Promise<number | null> => {
+  const handleSaveDraft = async (
+    showAlert = true
+  ): Promise<MealPlan | null> => {
     if (!selectedMeal) return null;
 
     const isExistingMeal = Boolean(selectedMeal.meal_id);
@@ -202,29 +202,34 @@ export default function PageOpp() {
 
     const method = isExistingMeal ? 'PUT' : 'POST';
 
-    const sanitizedIngredients = (selectedMeal.ingredients || []).map((ing: any) => {
-      if (typeof ing === 'string') {
+    const sanitizedIngredients = (selectedMeal.ingredients || []).map(
+      (ing: any) => {
+        if (typeof ing === 'string') {
+          return {
+            ingredient_id: null,
+            ingredient_name: ing.trim(),
+            quantity: 1.0,
+            unit: 'unit',
+          };
+        }
         return {
-          ingredient_id: null,
-          ingredient_name: ing.trim(),
-          quantity: 1.0,
-          unit: 'unit',
+          ingredient_id: ing.ingredient_id ?? null,
+          ingredient_name:
+            ing.ingredient_name || ing.name || 'Unnamed Ingredient',
+          quantity: Number(ing.quantity) || 1.0,
+          unit: ing.unit || 'unit',
         };
       }
-      return {
-        ingredient_id: ing.ingredient_id ?? null,
-        ingredient_name: ing.ingredient_name || ing.name || 'Unnamed Ingredient',
-        quantity: Number(ing.quantity) || 1.0,
-        unit: ing.unit || 'unit',
-      };
-    });
+    );
 
+    // Full payload mapped to backend MealCreate schema
     const payload = {
       meal_name: selectedMeal.meal_name || 'Untitled Meal',
       status: selectedMeal.status || 'Draft',
-      ingredients: sanitizedIngredients,
       calories_per_serving: Number(selectedMeal.calories_per_serving) || 0.0,
       nutritional_score: Number(selectedMeal.nutritional_score) || 0.0,
+      price_per_serving: Number(selectedMeal.price_per_serving) || 0.0,
+      ingredients: sanitizedIngredients,
     };
 
     try {
@@ -235,14 +240,11 @@ export default function PageOpp() {
 
       const assignedId = savedMeal.meal_id || selectedMeal.meal_id;
 
-      // Use savedMeal.ingredients directly since apiFetch already parses the JSON response
-      const updatedIngredients = savedMeal.ingredients || sanitizedIngredients;
-
       const updatedMealState: MealPlan = {
         ...selectedMeal,
         ...savedMeal,
         meal_id: assignedId,
-        ingredients: updatedIngredients,
+        ingredients: savedMeal.ingredients || sanitizedIngredients,
       };
 
       setSavedMealId(assignedId);
@@ -251,7 +253,8 @@ export default function PageOpp() {
       if (showAlert) {
         alert('Draft saved successfully!');
       }
-      return assignedId;
+
+      return updatedMealState;
     } catch (e: any) {
       console.error('Save failed:', e);
       alert(`Failed to save draft: ${e.message}`);
@@ -263,94 +266,150 @@ export default function PageOpp() {
   const handleAssignToClient = async (clientId: number | null, date: string) => {
     if (!clientId) return;
 
-    const todayStr = new Date().toLocaleDateString('en-CA'); 
-      if (date <= todayStr) {
-        alert('Meals can only be assigned to future dates.');
-        return;
-      }
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    if (date <= todayStr) {
+      alert('Meals can only be assigned to future dates.');
+      return;
+    }
 
-    const currentMealId = await handleSaveDraft(false);
-    if (!currentMealId) return;
+    // 1. Save or update draft first (handleSaveDraft returns MealPlan | null)
+    const savedMeal = await handleSaveDraft(false);
+    if (!savedMeal || !savedMeal.meal_id) return;
+
+    const currentMealId = savedMeal.meal_id;
 
     try {
-      const data = await apiFetch<{ message?: string }>('/api/operator/menu/assign', {
+      // 2. Send assignment request with price and status metadata
+      const response = await apiFetch<{
+        message: string;
+        overwritten: boolean;
+        assigned_meal_id: number;
+        assignment_date: string;
+        price_per_serving?: number;
+      }>('/api/operator/menu/assign', {
         method: 'POST',
         body: JSON.stringify({
           meal_id: currentMealId,
           client_id: clientId,
           assignment_date: date,
+          price_per_serving: Number(savedMeal.price_per_serving) || 0.0,
+          status: 'Active',
         }),
       });
 
-      alert(data.message || 'Meal assigned successfully!');
+      alert(response.message || 'Meal assigned successfully!');
 
-      // Update active meal state
-      setSelectedMeal((prev) => (
-        prev ? { ...prev, status: 'Active', assignment_date: date } : null
-      ));
-
-      // Keep global meals list in sync
-      setMeals((prevMeals) =>
-        prevMeals.map((m) =>
-          m.meal_id === currentMealId
-            ? { ...m, status: 'Active', assignment_date: date }
-            : m
-        )
+      // 3. Update active meal state
+      setSelectedMeal((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...savedMeal,
+              status: 'Active',
+              assignment_date: date,
+            }
+          : null
       );
+
+      // 4. Synchronize global meals list (safely handles newly created or existing items)
+      setMeals((prevMeals) => {
+        const existingIndex = prevMeals.findIndex((m) => m.meal_id === currentMealId);
+        const updatedMeal: MealPlan = {
+          ...(existingIndex >= 0 ? prevMeals[existingIndex] : savedMeal),
+          ...savedMeal,
+          status: 'Active',
+          assignment_date: date,
+        };
+
+        if (existingIndex >= 0) {
+          const updatedMeals = [...prevMeals];
+          updatedMeals[existingIndex] = updatedMeal;
+          return updatedMeals;
+        }
+
+        return [...prevMeals, updatedMeal];
+      });
     } catch (e: any) {
+      console.error('Assignment failed:', e);
       alert(`Assignment failed: ${e.message}`);
     }
   };
-
-  const handleCreateNewIngredient = async (ingredientName: string): Promise<MasterIngredient | null> => {
-    try {
-      const created = await apiFetch<MasterIngredient>('/api/ingredients', {
-        method: 'POST',
-        body: JSON.stringify({ ingredient_name: ingredientName.trim() }),
-      });
-
-      setAvailableIngredients((prev) => [...prev, created]);
-      return created;
-    } catch (err) {
-      console.error('Error adding new ingredient:', err);
-      alert('Could not add new ingredient to database.');
-      return null;
-    }
-  };
   
-  const [isAdding, setIsAdding] = useState(false);
-  const [newClientName, setNewClientName] = useState('');
+  const handleCreateNewIngredient = async (
+      input: string | CreateIngredientPayload
+    ): Promise<MasterIngredient | null> => {
+      const payload: CreateIngredientPayload =
+        typeof input === 'string'
+          ? { ingredient_name: input.trim() }
+          : { ...input, ingredient_name: input.ingredient_name.trim() };
 
-  const handleCreateClient = async (e?: React.FormEvent) => {
+      if (!payload.ingredient_name) return null;
+
+      try {
+        const created = await apiFetch<MasterIngredient>('/api/ingredients', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+
+        // Safely update state without adding duplicates
+        setAvailableIngredients((prev) => {
+          const exists = prev.some(
+            (ing) => ing.ingredient_id === created.ingredient_id
+          );
+          return exists ? prev : [...prev, created];
+        });
+
+        return created;
+      } catch (err) {
+        console.error('Error adding new ingredient:', err);
+        alert('Could not add new ingredient to database.');
+        return null;
+      }
+    };
+    
+    const [isAdding, setIsAdding] = useState(false);
+    const [newClientName, setNewClientName] = useState('');
+
+    const handleCreateClient = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+
     const trimmedName = newClientName.trim();
-    if (!trimmedName) return;
+    if (!trimmedName) {
+      alert('Client name is required.');
+      return;
+    }
 
     const trimmedLocation = newLocation.trim();
     const parsedPopulation = newPopulation !== '' ? parseInt(newPopulation, 10) : null;
+    const validPopulation =
+      parsedPopulation && !Number.isNaN(parsedPopulation)
+        ? Math.max(1, parsedPopulation)
+        : null;
 
     try {
       const createdClient = await apiFetch<Client>('/api/client/new', {
         method: 'POST',
         body: JSON.stringify({
           client_name: trimmedName,
+          contact_email: null,
           location: trimmedLocation || null,
-          population: Number.isNaN(parsedPopulation as any) ? null : parsedPopulation,
+          population: validPopulation,
         }),
       });
 
-      // Update local state and select the new client
       setClients((prev) => [...prev, createdClient]);
-      setSelectedClientId(createdClient.client_id);
+      if (createdClient.client_id) {
+        setSelectedClientId(createdClient.client_id);
+      }
 
-      // Reset all input states
+      // Reset existing form states
       setNewClientName('');
       setNewLocation('');
       setNewPopulation('');
       setIsAdding(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error creating client:', err);
-      alert('Could not add new client to database.');
+      alert(`Could not add new client: ${err?.message || 'Database error'}`);
     }
   };
 
@@ -947,7 +1006,7 @@ function GenerateView({
                       onClick={() => {
                         setSelectedIngredient(item);
                         setSearchTerm(item.ingredient_name);
-                        if (item.default_unit) setUnit(item.default_unit);
+                        if (item.unit) setUnit(item.unit);
                       }}
                       style={{ padding: '0.4rem 0.8rem', cursor: 'pointer', borderBottom: '1px solid #eee' }}
                     >
@@ -1179,13 +1238,6 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
       }
     }, [selectedClientId]);
 
-    // const assignmentMap = useMemo(() => {
-    //   const map: Record<string, string> = {};
-    //   assignments.forEach((item) => {
-    //     map[item.assignment_date] = item.meal.meal_name;
-    //   });
-    //   return map;
-    // }, [assignments]);
     
   const handleSelectSavedMeal = (day: number, meal: MealPlan): void => {
     if (selectedClientId === null) return;
