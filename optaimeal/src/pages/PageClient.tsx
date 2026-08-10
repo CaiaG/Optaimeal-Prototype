@@ -19,41 +19,14 @@ export default function PageClient() {
   const [weeklyAssignment, setWeeklyAssignment] = useState<any[]>([]);
   const [selectedDay, setSelectedDay] = useState('Monday'); 
   const [unavailableIngredients, setUnavailableIngredients] = useState<string[]>([]);
-  const [numStudents, setNumStudents] = useState<number | ''>('');
+  const [numStudents, setNumStudents] = useState<number | string>(1);
+  const [clientError, setClientError] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Safely find the current meal with Array.isArray guard
   const currentMeal = Array.isArray(weeklyAssignment)
     ? weeklyAssignment.find(m => m.assignment_date === selectedDay)
     : null;
-
-  useEffect(() => {
-    if (!clientId) return;
-
-    apiFetch<any>(`/api/client/${clientId}/assignments`)
-      .then((data) => {
-        if (data.client?.population != null) {
-          setNumStudents(data.client.population);
-        }
-        
-        // Build the 5-day Monday-Friday schedule
-        const fullWeek = buildFullWeekSchedule(data);
-        setWeeklyAssignment(fullWeek);
-
-        // Default selected day to Monday's date (or today if it's Mon-Fri)
-        if (fullWeek.length > 0) {
-          const todayKey = new Date().toISOString().split('T')[0];
-          const todayMatch = fullWeek.find((d) => d.assignment_date === todayKey);
-          setSelectedDay(todayMatch ? todayMatch.assignment_date : fullWeek[0].assignment_date);
-        }
-      })
-      .catch((err) => {
-        console.error("Error fetching menu:", err);
-        // Fallback: build an empty Mon-Fri schedule if server error occurs
-        const emptyWeek = buildFullWeekSchedule([]);
-        setWeeklyAssignment(emptyWeek);
-        setSelectedDay(emptyWeek[0].assignment_date);
-      });
-  }, [clientId]);
 
   // update count
   
@@ -73,7 +46,7 @@ export default function PageClient() {
     return dayNames.map((dayName, index) => {
       const dayDate = new Date(monday);
       dayDate.setDate(monday.getDate() + index);
-      
+
       // Format date as YYYY-MM-DD
       const dateKey = dayDate.toISOString().split('T')[0];
 
@@ -83,11 +56,19 @@ export default function PageClient() {
       );
 
       if (existing) {
+        const mealDetails = existing.meal || existing;
+
         return {
           ...existing,
+          ...mealDetails, // Flattens meal_name, status, ingredients to top level
           assignment_date: dateKey,
           day_name: dayName,
           isAssigned: true,
+          // Keeps nested .meal object populated for components expecting item.meal
+          meal: {
+            ...mealDetails,
+            assignment_date: dateKey,
+          },
         };
       }
 
@@ -100,22 +81,49 @@ export default function PageClient() {
         status: 'Unassigned',
         calories_per_serving: 0,
         nutritional_score: 0,
-        ingredients: '',
+        ingredients: [],
         isAssigned: false,
       };
     });
   };
 
-  const handleClientSubmit = (e: React.SyntheticEvent) => {
+  const handleClientSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
+    setClientError('');
+
     const parsedId = Number(inputClientId);
     if (!parsedId || isNaN(parsedId)) {
-      alert("Please enter a valid numeric Client ID");
+      setClientError('Please enter a valid numeric Client ID');
       return;
     }
-    setClientId(parsedId);
-    
-    setIsClientModalOpen(false);
+
+    setIsSubmitting(true);
+
+    try {
+      const data = await apiFetch<any>(`/api/client/${parsedId}/assignments`);
+
+      if (data.client?.population != null) {
+        setNumStudents(data.client.population);
+      }
+
+      const assignmentsList = Array.isArray(data.assignments) ? data.assignments : [];
+      const fullWeek = buildFullWeekSchedule(assignmentsList);
+      setWeeklyAssignment(fullWeek);
+
+      if (fullWeek.length > 0) {
+        const todayKey = new Date().toISOString().split('T')[0];
+        const todayMatch = fullWeek.find((d) => d.assignment_date === todayKey);
+        setSelectedDay(todayMatch ? todayMatch.assignment_date : fullWeek[0].assignment_date);
+      }
+
+      setClientId(parsedId);
+      setIsClientModalOpen(false);
+    } catch (err: any) {
+      console.error("Error fetching menu:", err);
+      setClientError('Client ID not found. Please check and try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -141,15 +149,29 @@ export default function PageClient() {
                 type="number" 
                 placeholder="Client ID (e.g. 1)"
                 value={inputClientId}
-                onChange={(e) => setInputClientId(e.target.value)}
+                onChange={(e) => {
+                  setInputClientId(e.target.value);
+                  if (clientError) setClientError(''); // Clear error on typing
+                }}
                 autoFocus
                 required
                 className={styles.client_input}
               />
 
+              {/* Display Error Message */}
+              {clientError && (
+                <p className={styles.error_message} style={{ color: '#e53e3e', marginTop: '8px', fontSize: '14px' }}>
+                  {clientError}
+                </p>
+              )}
+
               <div className={styles.modal_actions}>
-                <button type="submit" className={styles.submit_button}>
-                  View Menu
+                <button 
+                  type="submit" 
+                  className={styles.submit_button}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Verifying...' : 'View Menu'}
                 </button>
               </div>
             </form>
@@ -257,7 +279,7 @@ export default function PageClient() {
          <div className={styles.meal_details_card}>
         {/* Header */}
         <div className={styles.header_section}>
-          <span className={styles.date_badge}>Monday, Aug 3, 2026</span>
+          <span className={styles.date_badge}> {meal?.assignment_date} </span>
           <h2 className={styles.meal_title}>
             {meal?.meal_name || "No Meal Assigned"}
           </h2>
@@ -289,13 +311,13 @@ export default function PageClient() {
               id="student_count"
               type="number" 
               placeholder="Enter number..." 
-              value={numStudents}
+              value={numStudents ?? 1}
               onChange={(e) => {
                 const val = e.target.value;
                 setNumStudents(val === '' ? '' : Math.max(1, parseInt(val, 10) || 0));
               }}
               onBlur={() => {
-                if (numStudents === '' || numStudents < 1) {
+                if (numStudents === '' || Number(numStudents) < 1) {
                   setNumStudents(1);
                 }
               }}
@@ -457,7 +479,7 @@ export default function PageClient() {
                 </div>
 
                 <section className={styles.ingredients}>
-                  <h3>Ingredients Checklist</h3>
+                  <h3>Ingredients Per Serving</h3>
                   <p><small>Mark unavailable items with an [X]</small></p>
 
                   {ingredientList.length > 0 ? (

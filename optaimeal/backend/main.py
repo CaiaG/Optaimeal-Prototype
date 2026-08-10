@@ -375,9 +375,8 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
 
 
 
-@app.get("/api/client/{client_id}/assignments", response_model=List[ClientAssignmentResponse])
+@app.get("/api/client/{client_id}/assignments")
 def get_client_assignments(client_id: int, db: Session = Depends(database.get_db)):
-    # Verify client exists
     client = db.query(models.Client).filter(models.Client.client_id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -391,15 +390,21 @@ def get_client_assignments(client_id: int, db: Session = Depends(database.get_db
 
     result = []
     for assignment, meal in assignments:
+        formatted_meal = format_meal(meal)
+        formatted_meal["assignment_date"] = assignment.assignment_date
         result.append({
             "client_id": assignment.client_id,
             "assignment_date": assignment.assignment_date,
-            "meal": format_meal(meal)  
+            "meal": formatted_meal
         })
 
-    return result
-
-
+    return {
+        "client": {
+            "client_id": client.client_id,
+            "population": getattr(client, 'population', 1) 
+        },
+        "assignments": result
+    }
 
 # post new client
 @app.post("/api/client/new", response_model=ClientResponse)
