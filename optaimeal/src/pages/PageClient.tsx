@@ -381,17 +381,12 @@ export default function PageClient() {
     );
   }
 
-  function ChatView({ assignments = [], selectedDay, onDaySelect, unavailable = [], onToggleIngredient }: ChatViewProps) {
+  function ChatView({ assignments = [], selectedDay, onDaySelect }: ChatViewProps) {
     const [chatInput, setChatInput] = useState('');
     const [history, setHistory] = useState([{ sender: 'System', text: "Start chat" }]);
+    const [availabilityMap, setAvailabilityMap] = useState<Record<string | number, 'available' | 'insufficient' | 'unavailable'>>({});
+    const [isRegenerating, setIsRegenerating] = useState(false);
 
-    const toggle = (ing: string) => {
-      if (onToggleIngredient) {
-        onToggleIngredient((prev: string[]) => 
-          prev.includes(ing) ? prev.filter(i => i !== ing) : [...prev, ing]
-        );
-      }
-    };
 
     const handleSendMessage = () => {
       if (!chatInput.trim()) return;
@@ -428,6 +423,62 @@ export default function PageClient() {
         : undefined;
 
     const ingredientList = parseIngredients(rawIngredients);
+
+    type AvailabilityStatus = 'available' | 'insufficient' | 'unavailable';
+
+    const handleCycleAvailability = (key: string | number) => {
+      setAvailabilityMap((prev) => {
+        const currentStatus = prev[key] || 'available';
+        
+        // Explicitly typing nextStatus prevents TypeScript from widening to 'string'
+        const nextStatus: AvailabilityStatus =
+          currentStatus === 'available'
+            ? 'insufficient'
+            : currentStatus === 'insufficient'
+            ? 'unavailable'
+            : 'available';
+
+        return { ...prev, [key]: nextStatus };
+      });
+    };
+
+    // dummy version for now
+    const handleRegenerateMeal = async () => {
+      setIsRegenerating(true);
+
+      // Filter and map out constrained ingredients for LLM consumption
+      const ingredientConstraints = ingredientList.map((ing) => {
+        const isObject = typeof ing === 'object' && ing !== null;
+        const ingName = isObject ? ing.ingredient_name : ing;
+        const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
+        const status = availabilityMap[ingKey] || 'available';
+
+        return {
+          ingredient_name: ingName,
+          status: status, // 'available' | 'insufficient' | 'unavailable'
+        };
+      }).filter((item) => item.status !== 'available');
+
+      const payload = {
+        meal_id: currentMeal?.meal_id,
+        current_meal_name: currentMeal?.meal_name,
+        servings: numStudents || 1,
+        // Clear list of missing/limited items for prompt injection
+        unavailable_ingredients: ingredientConstraints
+          .filter((i) => i.status === 'unavailable')
+          .map((i) => i.ingredient_name),
+        insufficient_ingredients: ingredientConstraints
+          .filter((i) => i.status === 'insufficient')
+          .map((i) => i.ingredient_name),
+      };
+
+      try {
+        
+
+      } catch (err: any) {
+      } finally {
+      }
+    }
 
     return (
       <div className={styles.chat_wrapper}>
@@ -493,37 +544,66 @@ export default function PageClient() {
                 <div className={styles.meta_info}>
                   <p><strong>Calories:</strong> {currentMeal.calories_per_serving ?? 'N/A'} kcal</p>
                   <p><strong>Nutritional Score:</strong> {currentMeal.nutritional_score ?? 'N/A'}</p>
+                  <p><strong>Target Servings:</strong> {numStudents || 1}</p>
                 </div>
 
                 <section className={styles.ingredients}>
-                  <h3>Ingredients Per Serving</h3>
-                  <p><small>Mark unavailable items with an [X]</small></p>
+                  <h3>Ingredients Overview</h3>
+                  <p><small>Click items to toggle availability: <strong>[ ] Available</strong> &rarr; <strong>[!] Insufficient</strong> &rarr; <strong>[X] Out of Stock</strong></small></p>
 
                   {ingredientList.length > 0 ? (
                     ingredientList.map((ing: MealIngredient | string, i: number) => {
                       const isObject = typeof ing === 'object' && ing !== null;
                       const ingName = isObject ? ing.ingredient_name : ing;
-                      const ingId = isObject ? ing.ingredient_id : i;
+                      const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
 
-                      const displayText = isObject
-                        ? `${ing.quantity ?? 1} ${ing.unit ?? ''} ${ing.ingredient_name}`.trim()
-                        : ing;
+                      // Quantities calculation
+                      const perServingQty = isObject ? (ing.quantity ?? 1) : 1;
+                      const totalQty = perServingQty * (Number(numStudents) || 1);;
+                      const unit = isObject ? (ing.unit ?? '') : '';
 
-                      const isUnavailable = unavailable.includes(ingName) || unavailable.includes(ingId as any);
+                      // Availability state: 'available' | 'insufficient' | 'unavailable'
+                      const status = availabilityMap[ingKey] || 'available';
+
+                      // Formatting status styles
+                      let statusBadge = '[  ]';
+                      let itemStyle: React.CSSProperties = {
+                        cursor: 'pointer',
+                        marginBottom: '0.6rem',
+                        userSelect: 'none',
+                        padding: '0.3rem 0.5rem',
+                        borderRadius: '4px',
+                        transition: 'background-color 0.2s',
+                      };
+
+                      if (status === 'insufficient') {
+                        statusBadge = '[ ! ]';
+                        itemStyle = {
+                          ...itemStyle,
+                          color: '#d97706', // Warning Orange
+                          backgroundColor: '#fef3c7',
+                          fontWeight: 500,
+                        };
+                      } else if (status === 'unavailable') {
+                        statusBadge = '[ X ]';
+                        itemStyle = {
+                          ...itemStyle,
+                          color: '#ef4444', // Danger Red
+                          textDecoration: 'line-through',
+                          backgroundColor: '#fee2e2',
+                        };
+                      }
 
                       return (
-                        <div 
-                          key={`${ingId}-${i}`} 
-                          onClick={() => toggle(ingName)}
-                          style={{ 
-                            cursor: 'pointer', 
-                            textDecoration: isUnavailable ? 'line-through' : 'none',
-                            color: isUnavailable ? '#ef4444' : 'inherit',
-                            marginBottom: '0.5rem',
-                            userSelect: 'none'
-                          }}
+                        <div
+                          key={`${ingKey}-${i}`}
+                          onClick={() => handleCycleAvailability(ingKey)}
+                          style={itemStyle}
                         >
-                          [{isUnavailable ? 'X' : ' '}] {displayText}
+                          <span><strong>{statusBadge}</strong> {ingName}</span>
+                          <div style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: '0.1rem' }}>
+                            {perServingQty} {unit} / serving &bull; <strong>{totalQty} {unit} total</strong>
+                          </div>
                         </div>
                       );
                     })
@@ -534,9 +614,10 @@ export default function PageClient() {
 
                 <button
                   className={styles.regenerate_btn}
-                  onClick={() => alert("Regenerate meal logic triggered")}
+                  onClick={handleRegenerateMeal}
+                  disabled={isRegenerating}
                 >
-                  Regenerate Meal
+                  {isRegenerating ? 'Regenerating Meal...' : 'Regenerate Meal with Constraints'}
                 </button>
               </>
             ) : (
