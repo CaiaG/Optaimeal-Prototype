@@ -9,7 +9,20 @@ interface ChatViewProps {
   onDaySelect: (day: string) => void;
   unavailable: string[]; //
   onToggleIngredient: any;
+  clientId: number | null; 
+  numStudents: number | string;
+  onMealUpdated: (newMeal: any) => void; 
 }
+
+
+interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant' | 'system';
+  text: string;
+  timestamp: Date;
+}
+
+type AvailabilityStatus = 'available' | 'insufficient' | 'unavailable';
 
 export default function PageClient() {
   const [clientId, setClientId] = useState<number | null>(null);
@@ -143,6 +156,26 @@ export default function PageClient() {
     }
   };
 
+  const handleMealUpdated = (newMeal: any) => {
+   
+    setWeeklyAssignment((prevWeek) =>
+      prevWeek.map((assignment) => {
+        if (assignment.assignment_date === selectedDay) {
+          return {
+            ...assignment,
+            ...newMeal,          
+            meal_id: newMeal.meal_id,
+            isAssigned: true,
+            meal: {
+              ...newMeal,
+              assignment_date: assignment.assignment_date
+            }, 
+          };
+        }
+        return assignment;
+      })
+    );
+  };
   return (
     <div className={styles.client_container}>
       
@@ -220,6 +253,9 @@ export default function PageClient() {
           onDaySelect={setSelectedDay}
           unavailable={unavailableIngredients} 
           onToggleIngredient={setUnavailableIngredients} 
+          clientId={clientId}
+          numStudents={numStudents}
+          onMealUpdated={handleMealUpdated}
         />
       )}
 
@@ -381,56 +417,65 @@ export default function PageClient() {
     );
   }
 
-  function ChatView({ assignments = [], selectedDay, onDaySelect }: ChatViewProps) {
+  function ChatView({ assignments = [], selectedDay, onDaySelect, clientId, numStudents = 1,  onMealUpdated }: ChatViewProps) {
     const [chatInput, setChatInput] = useState('');
-    const [history, setHistory] = useState([{ sender: 'System', text: "Start chat" }]);
-    const [availabilityMap, setAvailabilityMap] = useState<Record<string | number, 'available' | 'insufficient' | 'unavailable'>>({});
+  
+    // 1. Unified the history state to use the strict ChatMessage interface
+    const [history, setHistory] = useState<ChatMessage[]>([
+      { id: 'init', sender: 'system', text: "Start chat", timestamp: new Date() }
+    ]);
+    
+    const [availabilityMap, setAvailabilityMap] = useState<Record<string | number, AvailabilityStatus>>({});
     const [isRegenerating, setIsRegenerating] = useState(false);
-
 
     const handleSendMessage = () => {
       if (!chatInput.trim()) return;
       
-      const newMessage = { sender: 'User', text: chatInput };
+      // Updated to match ChatMessage interface
+      const newMessage: ChatMessage = { 
+        id: Date.now().toString(), 
+        sender: 'user', 
+        text: chatInput,
+        timestamp: new Date()
+      };
+      
       setHistory(prev => [...prev, newMessage]);
       setChatInput('');
 
       setTimeout(() => {
-        setHistory(prev => [...prev, { sender: 'System', text: "Feedback received." }]);
+        setHistory(prev => [...prev, { 
+          id: (Date.now() + 1).toString(), 
+          sender: 'system', 
+          text: "Feedback received.",
+          timestamp: new Date()
+        }]);
       }, 1000);
     };
 
     const handleReset = () => {
-      setHistory([{ sender: 'System', text: "Yo" }]);
+      setHistory([{ id: Date.now().toString(), sender: 'system', text: "Yo", timestamp: new Date() }]);
       setChatInput('');
     };
 
-    // 1. Safely find assignment (string casting prevents Date/string type mismatch)
     const currentAssignment = assignments.find(
       (m) => String(m.assignment_date) === String(selectedDay)
     );
 
-    // Safe check using 'in' operator
     const currentMeal = (currentAssignment && 'meal' in currentAssignment)
       ? (currentAssignment as any).meal
       : currentAssignment;
 
-    
-    // 3. Safely parse ingredients list
     const rawIngredients = 
       typeof currentMeal === 'object' && currentMeal !== null && 'ingredients' in currentMeal
         ? currentMeal.ingredients
         : undefined;
 
-    const ingredientList = parseIngredients(rawIngredients);
-
-    type AvailabilityStatus = 'available' | 'insufficient' | 'unavailable';
+    const ingredientList = parseIngredients(rawIngredients); // Assuming parseIngredients is imported/defined
 
     const handleCycleAvailability = (key: string | number) => {
       setAvailabilityMap((prev) => {
         const currentStatus = prev[key] || 'available';
         
-        // Explicitly typing nextStatus prevents TypeScript from widening to 'string'
         const nextStatus: AvailabilityStatus =
           currentStatus === 'available'
             ? 'insufficient'
@@ -442,43 +487,94 @@ export default function PageClient() {
       });
     };
 
-    // dummy version for now
-    const handleRegenerateMeal = async () => {
+    const handleRegenerateMeal = async (userChatMessage?: string) => {
       setIsRegenerating(true);
 
-      // Filter and map out constrained ingredients for LLM consumption
-      const ingredientConstraints = ingredientList.map((ing) => {
-        const isObject = typeof ing === 'object' && ing !== null;
-        const ingName = isObject ? ing.ingredient_name : ing;
-        const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
-        const status = availabilityMap[ingKey] || 'available';
+      const ingredientConstraints = ingredientList
+        .map((ing: any) => {
+          const isObject = typeof ing === 'object' && ing !== null;
+          const ingName = isObject ? ing.ingredient_name : ing;
+          const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
+          const status = availabilityMap[ingKey] || 'available';
 
-        return {
-          ingredient_name: ingName,
-          status: status, // 'available' | 'insufficient' | 'unavailable'
-        };
-      }).filter((item) => item.status !== 'available');
+          return { ingredient_name: ingName, status };
+        })
+        .filter((item: any) => item.status !== 'available');
+
+      const unavailable = ingredientConstraints
+        .filter((i: any) => i.status === 'unavailable')
+        .map((i: any) => i.ingredient_name);
+
+      const insufficient = ingredientConstraints
+        .filter((i: any) => i.status === 'insufficient')
+        .map((i: any) => i.ingredient_name);
+
+      const constraintSummary = [
+        unavailable.length ? `Missing: ${unavailable.join(', ')}` : null,
+        insufficient.length ? `Low stock: ${insufficient.join(', ')}` : null,
+      ].filter(Boolean).join(' | ');
+
+      const promptText = userChatMessage || 
+        `Please regenerate "${currentMeal?.meal_name}" given these constraints: ${constraintSummary || 'No specific ingredient limits'}.`;
+
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        sender: 'user',
+        text: promptText,
+        timestamp: new Date(),
+      };
+      
+      setHistory((prev) => [...prev, userMsg]);
 
       const payload = {
+        client_id: clientId,                 
+        assignment_date: selectedDay,        
         meal_id: currentMeal?.meal_id,
         current_meal_name: currentMeal?.meal_name,
-        servings: numStudents || 1,
-        // Clear list of missing/limited items for prompt injection
-        unavailable_ingredients: ingredientConstraints
-          .filter((i) => i.status === 'unavailable')
-          .map((i) => i.ingredient_name),
-        insufficient_ingredients: ingredientConstraints
-          .filter((i) => i.status === 'insufficient')
-          .map((i) => i.ingredient_name),
+        servings: Number(numStudents) || 1, 
+        unavailable_ingredients: unavailable,
+        insufficient_ingredients: insufficient,
+        user_prompt: userChatMessage || null,
       };
 
       try {
-        
 
+        // change to aactual api route
+        const response = await apiFetch<{
+          reply: string;
+          new_meal?: any; 
+        }>('/api/chat/regenerate-meal', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+
+        const assistantMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          sender: 'assistant',
+          text: response.reply,
+          timestamp: new Date(),
+        };
+        
+        setHistory((prev) => [...prev, assistantMsg]);
+
+        if (response.new_meal && onMealUpdated) {
+          onMealUpdated(response.new_meal); 
+          setAvailabilityMap({});
+        }
       } catch (err: any) {
+        setHistory((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender: 'assistant',
+            text: `Error regenerating meal: ${err.message}`,
+            timestamp: new Date(),
+          },
+        ]);
       } finally {
+        setIsRegenerating(false);
       }
-    }
+    };
 
     return (
       <div className={styles.chat_wrapper}>
@@ -490,11 +586,16 @@ export default function PageClient() {
           </header>
 
           <div className={styles.chat_window}>
-            {history.map((msg, index) => (
-              <div key={index} className={msg.sender === 'User' ? styles.user_msg : styles.system_msg}>
-                <p><strong>{msg.sender}:</strong> {msg.text}</p>
-              </div>
-            ))}
+            {history.map((msg, index) => {
+              const isUser = msg.sender === 'user';
+              const senderLabel = isUser ? 'User' : msg.sender === 'assistant' ? 'Assistant' : 'System';
+
+              return (
+                <div key={index} className={isUser ? styles.user_msg : styles.system_msg}>
+                  <p><strong>{senderLabel}:</strong> {msg.text}</p>
+                </div>
+              );
+            })}
           </div>
 
           <footer className={styles.chat_input_area}>
@@ -559,7 +660,7 @@ export default function PageClient() {
 
                       // Quantities calculation
                       const perServingQty = isObject ? (ing.quantity ?? 1) : 1;
-                      const totalQty = perServingQty * (Number(numStudents) || 1);;
+                      const totalQty = perServingQty * (Number(numStudents) || 1);
                       const unit = isObject ? (ing.unit ?? '') : '';
 
                       // Availability state: 'available' | 'insufficient' | 'unavailable'
@@ -614,7 +715,7 @@ export default function PageClient() {
 
                 <button
                   className={styles.regenerate_btn}
-                  onClick={handleRegenerateMeal}
+                  onClick={() => handleRegenerateMeal()}
                   disabled={isRegenerating}
                 >
                   {isRegenerating ? 'Regenerating Meal...' : 'Regenerate Meal with Constraints'}
