@@ -140,6 +140,34 @@ class ClientAssignmentResponse(BaseModel):
     price_per_serving: Optional[float] = 0.0
     meal: MealDetailResponse
 
+# ==========================================
+# Optimization Schemas
+# ==========================================
+
+class ChatMessageSchema(BaseModel):
+    role: str
+    content: str
+
+class RegenerateRequest(BaseModel):
+    client_id: int
+    assignment_date: str
+    meal_id: int
+    current_meal_name: str
+    servings: int = 1
+    unavailable_ingredients: List[str] = []
+    insufficient_ingredients: List[str] = []
+    user_prompt: Optional[str] = None
+    chat_history: List[ChatMessageSchema] = []
+
+class RegenerateResponse(BaseModel):
+    reply: str
+    edited_meal: dict       
+    alternatives: List[dict]
+
+class ApplySelectionRequest(BaseModel):
+    client_id: int
+    assignment_date: str
+    selected_meal: dict
 
 # ==========================================
 # Helper Formatter Function
@@ -552,6 +580,7 @@ def create_client(payload: ClientCreate, db: Session = Depends(database.get_db))
     db.commit()
     db.refresh(new_client)
     return new_client
+
 @app.get("/api/client/menu/current/{client_id}")
 def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
     # 1. Fetch latest assignment with pre-loaded meal and ingredients
@@ -592,75 +621,111 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
         **formatted_meal
     }
 
-
-# Send real-time changes back to the backend logging table
-@app.post("/api/client/menu/adjust")
-def adjust_client_menu(request: MealAdjustmentRequest, db: Session = Depends(database.get_db)):
+# route to regenerate meal
+@app.post("/api/chat/regenerate-meal", response_model=RegenerateResponse)
+def regenerate_meal_options(request: RegenerateRequest, db: Session = Depends(database.get_db)):
     meal = db.query(models.Meal).filter(models.Meal.meal_id == request.meal_id).first()
     if not meal:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"Meal with ID {request.meal_id} not found"
-        )
+        raise HTTPException(status_code=404, detail="Meal not found")
 
-    if meal.status != "Active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Adjustments can only be made to Active menus"
-        )
-
-    # Convert dictionary adjustments to JSON string for logging storage
-    changes_str = json.dumps(request.adjustments) if isinstance(request.adjustments, dict) else str(request.adjustments)
-    client_id = request.adjustments.get("client_id") if isinstance(request.adjustments, dict) else None
-
+    # 1. Log exchange for analytics
+    log_data = {
+        "unavailable": request.unavailable_ingredients,
+        "insufficient": request.insufficient_ingredients,
+        "prompt": request.user_prompt
+    }
     new_log = models.ExchangeLog(
         meal_id=request.meal_id,
-        client_id=client_id,
-        action="ADJUSTMENT",
-        timestamp=datetime.now(timezone.utc),
-        client_changes=changes_str
+        client_id=request.client_id,
+        action="REGENERATE_REQUESTED",
+        client_changes=json.dumps(log_data)
     )
     db.add(new_log)
     db.commit()
 
-    return {"message": "Adjustments successfully reported for analytics."}
-
-
-# Request alternative, optimized meals based on reported constraints
-@app.get("/api/client/menu/optimize/{meal_id}")
-def optimize_meal(meal_id: int, db: Session = Depends(database.get_db)):
-    meal = db.query(models.Meal).filter(models.Meal.meal_id == meal_id).first()
-    if not meal:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"Original meal with ID {meal_id} not found"
-        )
-
-    latest_log = (
-        db.query(models.ExchangeLog)
-        .filter(models.ExchangeLog.meal_id == meal_id)
-        .order_by(models.ExchangeLog.timestamp.desc())
-        .first()
-    )
-
-    if not latest_log:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="No reported constraints found to optimize against."
-        )
-
-    # Standardized on meal_name across the codebase
-    optimized_suggestion = {
-        "original_meal_id": meal.meal_id,
-        "meal_name": f"Optimized {meal.meal_name}",
-        "status": "Active",
-        "adjustments_applied": latest_log.client_changes,
-        "nutritional_targets_met": True,
-        "suggested_ingredients": "Alternative ingredients substituted based on client log constraints"
+    # 2. Call LLM or Rule Engine here to generate choices
+    # (Mocked structure for demonstration)
+    
+    edited_meal = {
+        "meal_id": meal.meal_id,
+        "meal_name": f"{meal.meal_name} (Adjusted)",
+        "calories_per_serving": meal.calories_per_serving,
+        "nutritional_score": meal.nutritional_score,
+        "ingredients": [
+            # Ingredients with substituted items based on unavailable list
+        ],
+        "is_edited_original": True
     }
 
-    return optimized_suggestion
+    alternatives = [
+        {
+            "meal_id": 9901,  # Temporary ID or ID of pre-existing DB meal
+            "meal_name": "Grilled Chicken & Quinoa Bowl",
+            "calories_per_serving": 520,
+            "nutritional_score": "A",
+            "ingredients": ["Chicken Breast", "Quinoa", "Steamed Broccoli"],
+            "is_alternative": True
+        },
+        {
+            "meal_id": 9902,
+            "meal_name": "Tofu Vegetable Stir-Fry",
+            "calories_per_serving": 480,
+            "nutritional_score": "A+",
+            "ingredients": ["Firm Tofu", "Bell Peppers", "Snap Peas", "Brown Rice"],
+            "is_alternative": True
+        }
+    ]
 
+    return RegenerateResponse(
+        reply="I've prepared an adjusted version of your current meal as well as two alternative dishes that match your available ingredients.",
+        edited_meal=edited_meal,
+        alternatives=alternatives
+    )
+
+
+@app.post("/api/client/menu/apply-selection")
+def apply_meal_selection(request: ApplySelectionRequest, db: Session = Depends(database.get_db)):
+    # 1. Find the assignment record for this client and date
+    assignment = db.query(models.MealAssignment).filter(
+        models.MealAssignment.client_id == request.client_id,
+        models.MealAssignment.assignment_date == request.assignment_date
+    ).first()
+
+    if not assignment:
+        raise HTTPException(status_code=404, detail="No meal assignment found for this date")
+
+    # 2. Check if selected_meal already exists in DB or needs creation
+    chosen_meal_id = request.selected_meal.get("meal_id")
+    
+    # If it's a freshly generated inline object, create a new Meal record
+    if not chosen_meal_id or request.selected_meal.get("is_edited_original"):
+        new_meal = models.Meal(
+            meal_name=request.selected_meal.get("meal_name"),
+            calories_per_serving=request.selected_meal.get("calories_per_serving"),
+            nutritional_score=request.selected_meal.get("nutritional_score"),
+            status="Active"
+        )
+        db.add(new_meal)
+        db.flush()  # Populates new_meal.meal_id
+        chosen_meal_id = new_meal.meal_id
+
+    # 3. Update the assignment link
+    assignment.meal_id = chosen_meal_id
+    
+    # Log final confirmation
+    db.add(models.ExchangeLog(
+        meal_id=chosen_meal_id,
+        client_id=request.client_id,
+        action="SELECTION_CONFIRMED",
+        client_changes=json.dumps({"assignment_date": request.assignment_date})
+    ))
+
+    db.commit()
+
+    return {
+        "message": "Meal assignment updated successfully",
+        "assigned_meal": request.selected_meal
+    }
 
 # Fetch all clients (used for dropdowns/modals in frontend)
 @app.get("/api/clients", response_model=List[ClientResponse])

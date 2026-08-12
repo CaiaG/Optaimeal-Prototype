@@ -1,5 +1,5 @@
 import styles from './PageClient.module.css';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {type MealPlan, type MealIngredient, parseIngredients } from './types/mealplan';
 import { apiFetch } from '../services/api';
 
@@ -12,7 +12,8 @@ interface ChatViewProps {
   clientId: number | null; 
   numStudents: number | string;
   onMealUpdated: (newMeal: any) => void; 
-}
+  chatHistories: Record<string, ChatMessage[]>;
+  setChatHistories: React.Dispatch<React.SetStateAction<Record<string, ChatMessage[]>>>;}
 
 
 interface ChatMessage {
@@ -35,7 +36,7 @@ export default function PageClient() {
   const [numStudents, setNumStudents] = useState<number | string>(1);
   const [clientError, setClientError] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-
+  const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({});
   // Safely find the current meal with Array.isArray guard
   const currentMeal = Array.isArray(weeklyAssignment)
     ? weeklyAssignment.find(m => m.assignment_date === selectedDay)
@@ -256,6 +257,8 @@ export default function PageClient() {
           clientId={clientId}
           numStudents={numStudents}
           onMealUpdated={handleMealUpdated}
+          chatHistories={chatHistories}
+          setChatHistories={setChatHistories}
         />
       )}
 
@@ -417,45 +420,26 @@ export default function PageClient() {
     );
   }
 
-  function ChatView({ assignments = [], selectedDay, onDaySelect, clientId, numStudents = 1,  onMealUpdated }: ChatViewProps) {
-    const [chatInput, setChatInput] = useState('');
-  
-    // 1. Unified the history state to use the strict ChatMessage interface
-    const [history, setHistory] = useState<ChatMessage[]>([
-      { id: 'init', sender: 'system', text: "Start chat", timestamp: new Date() }
-    ]);
+  function ChatView({ assignments = [], selectedDay, onDaySelect, clientId, numStudents = 1,  onMealUpdated, setChatHistories, chatHistories }: ChatViewProps) {
     
-    const [availabilityMap, setAvailabilityMap] = useState<Record<string | number, AvailabilityStatus>>({});
+    const [chatInput, setChatInput] = useState('');
+    const [availabilityMap, setAvailabilityMap] = useState<Record<string, Record<string | number, AvailabilityStatus>>>({});
     const [isRegenerating, setIsRegenerating] = useState(false);
+    const [isApplyingSelection, setIsApplyingSelection] = useState(false);
 
-    const handleSendMessage = () => {
-      if (!chatInput.trim()) return;
-      
-      // Updated to match ChatMessage interface
-      const newMessage: ChatMessage = { 
-        id: Date.now().toString(), 
-        sender: 'user', 
-        text: chatInput,
-        timestamp: new Date()
-      };
-      
-      setHistory(prev => [...prev, newMessage]);
-      setChatInput('');
+    const [candidateOptions, setCandidateOptions] = useState<Record<string, any[]>>({});
 
-      setTimeout(() => {
-        setHistory(prev => [...prev, { 
-          id: (Date.now() + 1).toString(), 
-          sender: 'system', 
-          text: "Feedback received.",
-          timestamp: new Date()
-        }]);
-      }, 1000);
-    };
+    const dayKey = selectedDay ? String(selectedDay) : '';
+    // Derived Active States
+    const activeHistory = dayKey
+    ? chatHistories[dayKey] || [
+        { id: 'init', sender: 'assistant', text: `Chat ready for ${dayKey}.`, timestamp: new Date() }
+      ]
+    : [];
 
-    const handleReset = () => {
-      setHistory([{ id: Date.now().toString(), sender: 'system', text: "Yo", timestamp: new Date() }]);
-      setChatInput('');
-    };
+   
+    const activeAvailabilityMap = dayKey ? (availabilityMap[dayKey] || {}) : {};
+    const activeCandidateOptions = dayKey ? (candidateOptions[dayKey] || []) : [];
 
     const currentAssignment = assignments.find(
       (m) => String(m.assignment_date) === String(selectedDay)
@@ -470,11 +454,52 @@ export default function PageClient() {
         ? currentMeal.ingredients
         : undefined;
 
-    const ingredientList = parseIngredients(rawIngredients); // Assuming parseIngredients is imported/defined
+    const ingredientList = parseIngredients(rawIngredients);
+    
+    // Safe helper to append messages without stale closure bugs
+    const appendMessage = (msg: ChatMessage) => {
+      if (!dayKey) return;
+      setChatHistories((prev) => {
+        const currentDayHistory = prev[dayKey] || [
+          { id: 'init', sender: 'assistant', text: `Chat ready for ${dayKey}.`, timestamp: new Date() }
+        ];
+        return {
+          ...prev,
+          [dayKey]: [...currentDayHistory, msg]
+        };
+      });
+    };
+
+    const handleSendMessage = () => {
+      if (!chatInput.trim() || !selectedDay) return;
+      const userText = chatInput;
+      setChatInput('');
+      // Trigger regeneration with the user's typed chat feedback
+      handleRegenerateMeal(userText);
+    };
+
+    const handleReset = () => {
+      if (!dayKey) return; 
+
+      setChatHistories(prev => ({
+        ...prev,
+        [dayKey]: [{ id: Date.now().toString(), sender: 'system', text: "Chat reset for this meal.", timestamp: new Date() }] // ✅ use dayKey
+      }));
+
+      setAvailabilityMap(prev => ({
+        ...prev,
+        [dayKey]: {} 
+      }));
+
+      setChatInput('');
+    };
 
     const handleCycleAvailability = (key: string | number) => {
+      if (!dayKey) return; 
+
       setAvailabilityMap((prev) => {
-        const currentStatus = prev[key] || 'available';
+        const currentDayMap = prev[dayKey] || {}; 
+        const currentStatus = currentDayMap[key] || 'available';
         
         const nextStatus: AvailabilityStatus =
           currentStatus === 'available'
@@ -483,11 +508,15 @@ export default function PageClient() {
             ? 'unavailable'
             : 'available';
 
-        return { ...prev, [key]: nextStatus };
+        return {
+          ...prev,
+          [dayKey]: { ...currentDayMap, [key]: nextStatus } 
+        };
       });
     };
 
     const handleRegenerateMeal = async (userChatMessage?: string) => {
+      if (!selectedDay || !currentMeal) return;
       setIsRegenerating(true);
 
       const ingredientConstraints = ingredientList
@@ -495,7 +524,7 @@ export default function PageClient() {
           const isObject = typeof ing === 'object' && ing !== null;
           const ingName = isObject ? ing.ingredient_name : ing;
           const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
-          const status = availabilityMap[ingKey] || 'available';
+          const status = activeAvailabilityMap[ingKey] || 'available';
 
           return { ingredient_name: ingName, status };
         })
@@ -514,6 +543,13 @@ export default function PageClient() {
         insufficient.length ? `Low stock: ${insufficient.join(', ')}` : null,
       ].filter(Boolean).join(' | ');
 
+      const chatContext = activeHistory
+        .filter(msg => msg.sender === 'user' || msg.sender === 'assistant')
+        .map(msg => ({
+          role: msg.sender,
+          content: msg.text
+        }));
+
       const promptText = userChatMessage || 
         `Please regenerate "${currentMeal?.meal_name}" given these constraints: ${constraintSummary || 'No specific ingredient limits'}.`;
 
@@ -524,8 +560,9 @@ export default function PageClient() {
         timestamp: new Date(),
       };
       
-      setHistory((prev) => [...prev, userMsg]);
+      appendMessage(userMsg);
 
+      // Payload sending promptText so the LLM always gets the constraint summary
       const payload = {
         client_id: clientId,                 
         assignment_date: selectedDay,        
@@ -534,12 +571,11 @@ export default function PageClient() {
         servings: Number(numStudents) || 1, 
         unavailable_ingredients: unavailable,
         insufficient_ingredients: insufficient,
-        user_prompt: userChatMessage || null,
+        user_prompt: promptText, 
+        chat_history: chatContext, 
       };
 
       try {
-
-        // change to aactual api route
         const response = await apiFetch<{
           reply: string;
           new_meal?: any; 
@@ -555,24 +591,68 @@ export default function PageClient() {
           timestamp: new Date(),
         };
         
-        setHistory((prev) => [...prev, assistantMsg]);
+        appendMessage(assistantMsg);
 
         if (response.new_meal && onMealUpdated) {
           onMealUpdated(response.new_meal); 
-          setAvailabilityMap({});
+          setAvailabilityMap(prev => ({ ...prev, [dayKey]: {} }));
         }
       } catch (err: any) {
-        setHistory((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            sender: 'assistant',
-            text: `Error regenerating meal: ${err.message}`,
-            timestamp: new Date(),
-          },
-        ]);
+        appendMessage({
+          id: (Date.now() + 1).toString(),
+          sender: 'assistant',
+          text: `Error regenerating meal: ${err.message}`,
+          timestamp: new Date(),
+        });
       } finally {
         setIsRegenerating(false);
+      }
+    };
+
+    const handleApplySelection = async (selectedOption: any) => {
+      if (!selectedDay) return;
+      setIsApplyingSelection(true);
+
+      const payload = {
+        client_id: clientId,
+        assignment_date: selectedDay,
+        selected_meal: selectedOption
+      };
+
+      try {
+        const response = await apiFetch<{
+          message: string;
+          assigned_meal: any;
+        }>('/api/client/menu/apply-selection', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+
+        // Update parent menu state
+        if (onMealUpdated && response.assigned_meal) {
+          onMealUpdated(response.assigned_meal);
+        }
+
+        // Reset candidate choices and ingredient toggles for this day
+        setCandidateOptions((prev) => ({ ...prev, [dayKey]: [] }));
+        setAvailabilityMap((prev) => ({ ...prev, [dayKey]: {} }));
+
+        appendMessage({
+          id: Date.now().toString(),
+          sender: 'system',
+          text: `Successfully assigned "${selectedOption.meal_name}" to ${dayKey}.`,
+          timestamp: new Date(),
+        });
+
+      } catch (err: any) {
+        appendMessage({
+          id: Date.now().toString(),
+          sender: 'assistant',
+          text: `Failed to update meal assignment: ${err.message}`,
+          timestamp: new Date(),
+        });
+      } finally {
+        setIsApplyingSelection(false);
       }
     };
 
@@ -586,18 +666,68 @@ export default function PageClient() {
           </header>
 
           <div className={styles.chat_window}>
-            {history.map((msg, index) => {
+            {activeHistory.map((msg, index) => {
               const isUser = msg.sender === 'user';
               const senderLabel = isUser ? 'User' : msg.sender === 'assistant' ? 'Assistant' : 'System';
 
               return (
-                <div key={index} className={isUser ? styles.user_msg : styles.system_msg}>
+                <div key={msg.id || index} className={isUser ? styles.user_msg : styles.system_msg}>
                   <p><strong>{senderLabel}:</strong> {msg.text}</p>
                 </div>
               );
             })}
+
+
+            {activeCandidateOptions.length > 0 && (
+              <section className={styles.options_container} style={{ marginBottom: '1.5rem' }}>
+                <h4 style={{ margin: '0.5rem 0', color: '#2563eb' }}>Suggested Options</h4>
+                <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.8rem' }}>
+                  Select an option below to override current meal assignment:
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {activeCandidateOptions.map((option, idx) => (
+                    <div 
+                      key={option.meal_id || idx}
+                      style={{
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        padding: '0.75rem',
+                        backgroundColor: option.is_edited_original ? '#f0fdf4' : '#ffffff'
+                      }}
+                    >
+                      <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>
+                        {option.meal_name} {option.is_edited_original && <span style={{ color: '#16a34a', fontSize: '0.8rem' }}>(Adjusted)</span>}
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: '#64748b', margin: '0.2rem 0' }}>
+                        {option.calories_per_serving ?? 'N/A'} kcal &bull; Score: {option.nutritional_score ?? 'N/A'}
+                      </div>
+
+                      <button
+                        onClick={() => handleApplySelection(option)}
+                        disabled={isApplyingSelection}
+                        style={{
+                          marginTop: '0.5rem',
+                          width: '100%',
+                          padding: '0.4rem',
+                          backgroundColor: '#2563eb',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontWeight: 500
+                        }}
+                      >
+                        {isApplyingSelection ? 'Applying...' : 'Select This Meal'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
 
+          
           <footer className={styles.chat_input_area}>
             <input
               type="text"
@@ -607,8 +737,8 @@ export default function PageClient() {
               onChange={(e) => setChatInput(e.target.value)}
               onKeyUp={(e) => e.key === 'Enter' && handleSendMessage()}
             />
-            <button className={styles.send_btn} onClick={handleSendMessage}>
-              Send
+            <button className={styles.send_btn} onClick={handleSendMessage} disabled={isRegenerating}>
+              {isRegenerating ? 'Sending...' : 'Send'}
             </button>
           </footer>
         </div>
@@ -636,6 +766,8 @@ export default function PageClient() {
             })}
           </div>
 
+          
+
           {/* Meal Detail Card */}
           <div className={styles.meal_card}>
             {currentMeal ? (
@@ -658,15 +790,12 @@ export default function PageClient() {
                       const ingName = isObject ? ing.ingredient_name : ing;
                       const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
 
-                      // Quantities calculation
                       const perServingQty = isObject ? (ing.quantity ?? 1) : 1;
                       const totalQty = perServingQty * (Number(numStudents) || 1);
                       const unit = isObject ? (ing.unit ?? '') : '';
 
-                      // Availability state: 'available' | 'insufficient' | 'unavailable'
-                      const status = availabilityMap[ingKey] || 'available';
+                      const status = activeAvailabilityMap[ingKey] || 'available';
 
-                      // Formatting status styles
                       let statusBadge = '[  ]';
                       let itemStyle: React.CSSProperties = {
                         cursor: 'pointer',
@@ -681,7 +810,7 @@ export default function PageClient() {
                         statusBadge = '[ ! ]';
                         itemStyle = {
                           ...itemStyle,
-                          color: '#d97706', // Warning Orange
+                          color: '#d97706',
                           backgroundColor: '#fef3c7',
                           fontWeight: 500,
                         };
@@ -689,7 +818,7 @@ export default function PageClient() {
                         statusBadge = '[ X ]';
                         itemStyle = {
                           ...itemStyle,
-                          color: '#ef4444', // Danger Red
+                          color: '#ef4444',
                           textDecoration: 'line-through',
                           backgroundColor: '#fee2e2',
                         };
