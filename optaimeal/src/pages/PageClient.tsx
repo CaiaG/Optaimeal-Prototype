@@ -13,7 +13,10 @@ interface ChatViewProps {
   numStudents: number | string;
   onMealUpdated: (newMeal: any) => void; 
   chatHistories: Record<string, ChatMessage[]>;
-  setChatHistories: React.Dispatch<React.SetStateAction<Record<string, ChatMessage[]>>>;}
+  setChatHistories: React.Dispatch<React.SetStateAction<Record<string, ChatMessage[]>>>;
+  candidateOptions: Record<string, any[]>;
+  setCandidateOptions: React.Dispatch<React.SetStateAction<Record<string, any[]>>>;
+}
 
 
 interface ChatMessage {
@@ -37,6 +40,8 @@ export default function PageClient() {
   const [clientError, setClientError] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({});
+  const [candidateOptions, setCandidateOptions] = useState<Record<string, any[]>>({});
+
   // Safely find the current meal with Array.isArray guard
   const currentMeal = Array.isArray(weeklyAssignment)
     ? weeklyAssignment.find(m => m.assignment_date === selectedDay)
@@ -259,6 +264,8 @@ export default function PageClient() {
           onMealUpdated={handleMealUpdated}
           chatHistories={chatHistories}
           setChatHistories={setChatHistories}
+          candidateOptions={candidateOptions}
+          setCandidateOptions={setCandidateOptions}
         />
       )}
 
@@ -420,24 +427,21 @@ export default function PageClient() {
     );
   }
 
-  function ChatView({ assignments = [], selectedDay, onDaySelect, clientId, numStudents = 1,  onMealUpdated, setChatHistories, chatHistories }: ChatViewProps) {
-    
+  function ChatView({ assignments = [], selectedDay, onDaySelect, clientId, numStudents = 1, onMealUpdated, setChatHistories, chatHistories,candidateOptions,       // <-- ADD THIS
+  setCandidateOptions }: ChatViewProps) {
     const [chatInput, setChatInput] = useState('');
     const [availabilityMap, setAvailabilityMap] = useState<Record<string, Record<string | number, AvailabilityStatus>>>({});
     const [isRegenerating, setIsRegenerating] = useState(false);
     const [isApplyingSelection, setIsApplyingSelection] = useState(false);
-
-    const [candidateOptions, setCandidateOptions] = useState<Record<string, any[]>>({});
-
     const dayKey = selectedDay ? String(selectedDay) : '';
+    
     // Derived Active States
     const activeHistory = dayKey
-    ? chatHistories[dayKey] || [
-        { id: 'init', sender: 'assistant', text: `Chat ready for ${dayKey}.`, timestamp: new Date() }
-      ]
-    : [];
+      ? chatHistories[dayKey] || [
+          { id: 'init', sender: 'assistant', text: `Chat ready for ${dayKey}.`, timestamp: new Date() }
+        ]
+      : [];
 
-   
     const activeAvailabilityMap = dayKey ? (availabilityMap[dayKey] || {}) : {};
     const activeCandidateOptions = dayKey ? (candidateOptions[dayKey] || []) : [];
 
@@ -474,8 +478,23 @@ export default function PageClient() {
       if (!chatInput.trim() || !selectedDay) return;
       const userText = chatInput;
       setChatInput('');
-      // Trigger regeneration with the user's typed chat feedback
-      handleRegenerateMeal(userText);
+
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        sender: 'user',
+        text: userText,
+        timestamp: new Date(),
+      };
+      appendMessage(userMsg);
+
+      // 2. Respond with a generic message instead of regenerating
+      const assistantMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        sender: 'assistant',
+        text: "Thanks for your input! When you're ready to update the menu for this day, click 'Regenerate Meal with Constraints' below.",
+        timestamp: new Date(),
+      };
+      appendMessage(assistantMsg);
     };
 
     const handleReset = () => {
@@ -483,12 +502,17 @@ export default function PageClient() {
 
       setChatHistories(prev => ({
         ...prev,
-        [dayKey]: [{ id: Date.now().toString(), sender: 'system', text: "Chat reset for this meal.", timestamp: new Date() }] // ✅ use dayKey
+        [dayKey]: [{ id: Date.now().toString(), sender: 'system', text: "Chat reset for this meal.", timestamp: new Date() }]
       }));
 
       setAvailabilityMap(prev => ({
         ...prev,
         [dayKey]: {} 
+      }));
+
+      setCandidateOptions(prev => ({
+        ...prev,
+        [dayKey]: []
       }));
 
       setChatInput('');
@@ -518,6 +542,9 @@ export default function PageClient() {
     const handleRegenerateMeal = async (userChatMessage?: string) => {
       if (!selectedDay || !currentMeal) return;
       setIsRegenerating(true);
+
+      // Guarantee consistent key format
+      const currentDayKey = String(selectedDay);
 
       const ingredientConstraints = ingredientList
         .map((ing: any) => {
@@ -562,7 +589,6 @@ export default function PageClient() {
       
       appendMessage(userMsg);
 
-      // Payload sending promptText so the LLM always gets the constraint summary
       const payload = {
         client_id: clientId,                 
         assignment_date: selectedDay,        
@@ -576,27 +602,59 @@ export default function PageClient() {
       };
 
       try {
-        const response = await apiFetch<{
-          reply: string;
-          new_meal?: any; 
-        }>('/api/chat/regenerate-meal', {
+        const rawResponse = await apiFetch<any>('/api/chat/regenerate-meal', {
           method: 'POST',
           body: JSON.stringify(payload),
         });
 
+        console.log('Regenerate API Raw Response:', rawResponse);
+
+        // Unwrap response if wrapped inside .data
+        const response = rawResponse?.data || rawResponse || {};
+
         const assistantMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
           sender: 'assistant',
-          text: response.reply,
+          text: response.reply || 'Here are some regenerated options for you:',
           timestamp: new Date(),
         };
         
         appendMessage(assistantMsg);
 
-        if (response.new_meal && onMealUpdated) {
-          onMealUpdated(response.new_meal); 
-          setAvailabilityMap(prev => ({ ...prev, [dayKey]: {} }));
+        // Extract meals from any supported property key
+        const primaryEditedMeal = response.edited_meal || response.meal || response.assigned_meal;
+        const additionalAlternatives = Array.isArray(response.alternatives) ? response.alternatives : [];
+
+        const rawList: any[] = [];
+        if (primaryEditedMeal) {
+          rawList.push({ ...primaryEditedMeal, is_edited_original: true });
         }
+        if (additionalAlternatives.length > 0) {
+          rawList.push(...additionalAlternatives);
+        }
+
+        // Standardize object structure
+        const formattedCandidates = rawList.map((alt: any) => {
+          const mealData = alt.meal || alt;
+          return {
+            ...mealData,
+            meal_name: mealData.meal_name || mealData.name || 'Suggested Option',
+            assignment_date: selectedDay,
+            is_edited_original: alt.is_edited_original ?? mealData.is_edited_original ?? false,
+          };
+        });
+
+        console.log('Formatted Candidates to Save:', formattedCandidates);
+
+        if (formattedCandidates.length > 0) {
+          setCandidateOptions((prev) => ({
+            ...prev,
+            [currentDayKey]: formattedCandidates,
+          }));
+        }
+
+        setAvailabilityMap((prev) => ({ ...prev, [currentDayKey]: {} }));
+
       } catch (err: any) {
         appendMessage({
           id: (Date.now() + 1).toString(),
@@ -628,12 +686,10 @@ export default function PageClient() {
           body: JSON.stringify(payload)
         });
 
-        // Update parent menu state
         if (onMealUpdated && response.assigned_meal) {
           onMealUpdated(response.assigned_meal);
         }
 
-        // Reset candidate choices and ingredient toggles for this day
         setCandidateOptions((prev) => ({ ...prev, [dayKey]: [] }));
         setAvailabilityMap((prev) => ({ ...prev, [dayKey]: {} }));
 
@@ -677,57 +733,93 @@ export default function PageClient() {
               );
             })}
 
-
             {activeCandidateOptions.length > 0 && (
-              <section className={styles.options_container} style={{ marginBottom: '1.5rem' }}>
-                <h4 style={{ margin: '0.5rem 0', color: '#2563eb' }}>Suggested Options</h4>
-                <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.8rem' }}>
+              <section className={styles.options_container}>
+                <h4 className={styles.options_title}>Suggested Options</h4>
+                <p className={styles.options_subtitle}>
                   Select an option below to override current meal assignment:
                 </p>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  {activeCandidateOptions.map((option, idx) => (
-                    <div 
-                      key={option.meal_id || idx}
-                      style={{
-                        border: '1px solid #cbd5e1',
-                        borderRadius: '6px',
-                        padding: '0.75rem',
-                        backgroundColor: option.is_edited_original ? '#f0fdf4' : '#ffffff'
-                      }}
-                    >
-                      <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>
-                        {option.meal_name} {option.is_edited_original && <span style={{ color: '#16a34a', fontSize: '0.8rem' }}>(Adjusted)</span>}
-                      </div>
-                      <div style={{ fontSize: '0.85rem', color: '#64748b', margin: '0.2rem 0' }}>
-                        {option.calories_per_serving ?? 'N/A'} kcal &bull; Score: {option.nutritional_score ?? 'N/A'}
-                      </div>
+                <div className={styles.options_scroll_row}>
+                  {activeCandidateOptions.map((option, idx) => {
+                    const ingredients = Array.isArray(option.ingredients) ? option.ingredients : [];
+                    const instructions = Array.isArray(option.instructions) ? option.instructions : [];
 
-                      <button
-                        onClick={() => handleApplySelection(option)}
-                        disabled={isApplyingSelection}
-                        style={{
-                          marginTop: '0.5rem',
-                          width: '100%',
-                          padding: '0.4rem',
-                          backgroundColor: '#2563eb',
-                          color: '#fff',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontWeight: 500
-                        }}
+                    return (
+                      <div 
+                        key={option.meal_id || idx}
+                        className={`${styles.option_card} ${option.is_edited_original ? styles.option_card_adjusted : ''}`}
                       >
-                        {isApplyingSelection ? 'Applying...' : 'Select This Meal'}
-                      </button>
-                    </div>
-                  ))}
+                        <div>
+                          {/* Header */}
+                          <div className={styles.card_header}>
+                            <div className={styles.card_title}>{option.meal_name}</div>
+                            {option.is_edited_original && (
+                              <span className={styles.adjusted_badge}>Adjusted</span>
+                            )}
+                          </div>
+
+                          {/* Nutrition & Servings */}
+                          <div className={styles.nutrition_info}>
+                            <strong>{option.calories_per_serving ?? 'N/A'}</strong> kcal &bull; Score: <strong>{option.nutritional_score ?? 'N/A'}</strong>
+                            {option.servings ? ` • ${option.servings} Servings` : ''}
+                          </div>
+
+                          {/* Ingredients */}
+                          {ingredients.length > 0 && (
+                            <div>
+                              <div className={styles.section_label}>Ingredients ({ingredients.length})</div>
+                              <div className={styles.ingredients_box}>
+                                <ul className={styles.ingredients_list}>
+                                  {ingredients.map((ing: any, i: number) => {
+                                    const isObj = typeof ing === 'object' && ing !== null;
+                                    const name = isObj ? ing.ingredient_name : ing;
+                                    const qty = isObj && ing.quantity ? `${ing.quantity}${ing.unit ? ' ' + ing.unit : ''}` : null;
+                                    const status = isObj ? ing.status : null;
+
+                                    return (
+                                      <li key={i} className={styles.ingredient_item}>
+                                        {name} {qty && <span className={styles.ingredient_qty}>({qty})</span>}
+                                        {status && status !== 'available' && (
+                                          <span className={status === 'substituted' ? styles.status_substituted : styles.status_alert}>
+                                            [{status}]
+                                          </span>
+                                        )}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Preparation Steps */}
+                          {instructions.length > 0 && (
+                            <div className={styles.instructions_container}>
+                              <div className={styles.section_label}>Preparation Steps</div>
+                              <p className={styles.instructions_text}>
+                                {instructions.join(' ')}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Select Button */}
+                        <button
+                          onClick={() => handleApplySelection(option)}
+                          disabled={isApplyingSelection}
+                          className={styles.select_button}
+                        >
+                          {isApplyingSelection ? 'Applying...' : 'Select This Meal'}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}
           </div>
 
-          
           <footer className={styles.chat_input_area}>
             <input
               type="text"
@@ -765,8 +857,6 @@ export default function PageClient() {
               );
             })}
           </div>
-
-          
 
           {/* Meal Detail Card */}
           <div className={styles.meal_card}>

@@ -36,7 +36,7 @@ __pycache__/
 .pytest_cache/
 
 # Local Database
-optaimeal.db
+optaimeal.dbP
 *.sqlite3
 
 .env

@@ -1,17 +1,31 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from pydantic import BaseModel, ConfigDict
-from datetime import date, datetime, timezone
+from pydantic import BaseModel, ConfigDict, ValidationError
+from datetime import date, datetime
 import json
-
-from typing import Dict, Any, List, Union, Optional
-
+import os
+from pathlib import Path
+from dotenv import load_dotenv, find_dotenv
+from groq import Groq
+from typing import Dict, Any, List, Optional
 import models, database 
 
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="OPTAIMEAL API")
+
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError(
+        f"GROQ_API_KEY is missing! Looking at: {env_path}\n"
+        "Make sure the file contains: GROQ_API_KEY=gsk_your_key_here"
+    )
+
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -390,7 +404,7 @@ def assign_menu_to_client(request: MenuAssignmentRequest, db: Session = Depends(
     }
 
 
-# Access accumulated reports of client changes.
+# Access accumulated reports of client changes. UNIMPLEMENTED
 @app.get("/api/operator/menu/analytics")
 def get_menu_analytics(db: Session = Depends(database.get_db)):
     logs = db.query(models.ExchangeLog).order_by(models.ExchangeLog.timestamp.desc()).all()
@@ -621,7 +635,8 @@ def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
         **formatted_meal
     }
 
-# route to regenerate meal
+
+# EXHANGE LOG REFAC
 @app.post("/api/chat/regenerate-meal", response_model=RegenerateResponse)
 def regenerate_meal_options(request: RegenerateRequest, db: Session = Depends(database.get_db)):
     meal = db.query(models.Meal).filter(models.Meal.meal_id == request.meal_id).first()
@@ -634,55 +649,115 @@ def regenerate_meal_options(request: RegenerateRequest, db: Session = Depends(da
         "insufficient": request.insufficient_ingredients,
         "prompt": request.user_prompt
     }
-    new_log = models.ExchangeLog(
-        meal_id=request.meal_id,
-        client_id=request.client_id,
-        action="REGENERATE_REQUESTED",
-        client_changes=json.dumps(log_data)
-    )
-    db.add(new_log)
+    # new_log = models.ExchangeLog(
+    #     meal_id=request.meal_id,
+    #     client_id=request.client_id,
+    #     action="REGENERATE_REQUESTED",
+    #     client_changes=json.dumps(log_data)
+    # )
+    # db.add(new_log)
     db.commit()
 
-    # 2. Call LLM or Rule Engine here to generate choices
-    # (Mocked structure for demonstration)
-    
-    edited_meal = {
-        "meal_id": meal.meal_id,
-        "meal_name": f"{meal.meal_name} (Adjusted)",
-        "calories_per_serving": meal.calories_per_serving,
-        "nutritional_score": meal.nutritional_score,
-        "ingredients": [
-            # Ingredients with substituted items based on unavailable list
-        ],
-        "is_edited_original": True
-    }
+    # 2. Build Groq prompt and message context
+    system_prompt = f"""
+        ### PRIMARY OBJECTIVES
+        1. **Adjust Current Meal (`edited_meal`)**:
+        - **Substitutions**: Replace any missing/unavailable ingredients with nutritionally and culinary equivalent substitutes suited for institutional kitchen scale.
+        - **Ratio & Quantity Adjustment**: If an ingredient is listed as low-stock/insufficient, or if the conversation context specifies partial availability, adjust recipe proportions and batch component ratios accordingly (e.g., extend proteins with grains/legumes, recalculate component weights/servings) to preserve overall volume, flavor balance, and target nutritional standards.
+        2. **Generate Alternatives (`alternatives`)**:
+        - Propose exactly **2 distinct alternative meal options** that completely avoid all unavailable ingredients and optimize for low-stock items.
+        3. **Conversational Summary (`reply`)**:
+        - Provide a concise, professional culinary explanation summarizing the recipe adaptations made, why specific substitutions/ratios were selected, and highlighting the 2 alternative options provided.
 
-    alternatives = [
-        {
-            "meal_id": 9901,  # Temporary ID or ID of pre-existing DB meal
-            "meal_name": "Grilled Chicken & Quinoa Bowl",
+        ### INPUT CONSTRAINTS TO ENFORCE
+        - Respect all specified `unavailable_ingredients` and `insufficient_ingredients`.
+        - Check prior `chat_history` for user-defined dietary requirements, volume adjustments, or explicit ingredient tweaks.
+        - Ensure all meal options maintain balanced calories and nutritional scores appropriate for institutional dining.
+
+        ### REQUIRED JSON OUTPUT FORMAT
+        You MUST reply strictly with a valid JSON object matching this structure (do not include Markdown wrappers or preambles outside the JSON if using JSON mode):
+        {{
+        "reply": "A brief message to the user explaining the adjustments made.",
+        "edited_meal": {{
+            "meal_id": {meal.meal_id},
+            "meal_name": "Adjusted Meal Name",
+            "calories_per_serving": {meal.calories_per_serving or 500},
+            "nutritional_score": "{meal.nutritional_score or '0'}",
+            "ingredients": ["Substituted Ingredient 1", "Ingredient 2"],
+            "is_edited_original": true
+        }},
+        "alternatives": [
+            {{
+            "meal_id": 9901,
+            "meal_name": "New Dish Name",
             "calories_per_serving": 520,
-            "nutritional_score": "A",
-            "ingredients": ["Chicken Breast", "Quinoa", "Steamed Broccoli"],
-            "is_alternative": True
-        },
-        {
+            "nutritional_score": <number or string strictly on a 1.0 to 10.0 scale, e.g. 8.5>,
+            "ingredients": ["Ingredient A", "Ingredient B"],
+            "is_alternative": true
+            }},
+            {{
             "meal_id": 9902,
-            "meal_name": "Tofu Vegetable Stir-Fry",
+            "meal_name": "Second New Dish Name",
             "calories_per_serving": 480,
-            "nutritional_score": "A+",
-            "ingredients": ["Firm Tofu", "Bell Peppers", "Snap Peas", "Brown Rice"],
-            "is_alternative": True
-        }
-    ]
+            "nutritional_score": <number or string strictly on a 1.0 to 10.0 scale, e.g. 8.5>,
+            "ingredients": ["Ingredient C", "Ingredient D"],
+            "is_alternative": true
+            }}
+        ]
+        }}
+    """
 
-    return RegenerateResponse(
-        reply="I've prepared an adjusted version of your current meal as well as two alternative dishes that match your available ingredients.",
-        edited_meal=edited_meal,
-        alternatives=alternatives
-    )
+    messages = [{"role": "system", "content": system_prompt}]
 
+    # Format previous chat history into Groq format
+    for msg in request.chat_history:
+        role = "assistant" if msg.role == "assistant" else "user"
+        messages.append({"role": role, "content": msg.content})
 
+    # Append current context and constraints (INCLUDING original ingredients)
+    original_ingredients = getattr(meal, "ingredients", "Not specified")
+    user_context = f"""
+        Current Meal Name: {meal.meal_name} (ID: {meal.meal_id})
+        Current Ingredients: {original_ingredients}
+        Target Servings: {request.servings}
+        Unavailable Ingredients to Replace: {', '.join(request.unavailable_ingredients) or 'None'}
+        Insufficient Ingredients to Reduce/Replace: {', '.join(request.insufficient_ingredients) or 'None'}
+        User Request: {request.user_prompt or 'Generate alternative meal options based on constraints.'}
+        """
+    messages.append({"role": "user", "content": user_context})
+
+    # 3. Call Groq API with JSON mode enabled
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+
+        response_text = completion.choices[0].message.content
+        parsed_data = json.loads(response_text)
+
+        # Validates fields against Pydantic model
+        return RegenerateResponse(**parsed_data)
+
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Groq LLM returned malformed JSON string."
+        )
+    except ValidationError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"LLM JSON schema mismatch: {ve.errors()}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Groq API Error: {str(e)}"
+        )
+
+# UNTESTED
 @app.post("/api/client/menu/apply-selection")
 def apply_meal_selection(request: ApplySelectionRequest, db: Session = Depends(database.get_db)):
     # 1. Find the assignment record for this client and date
@@ -713,12 +788,12 @@ def apply_meal_selection(request: ApplySelectionRequest, db: Session = Depends(d
     assignment.meal_id = chosen_meal_id
     
     # Log final confirmation
-    db.add(models.ExchangeLog(
-        meal_id=chosen_meal_id,
-        client_id=request.client_id,
-        action="SELECTION_CONFIRMED",
-        client_changes=json.dumps({"assignment_date": request.assignment_date})
-    ))
+    # db.add(models.ExchangeLog(
+    #     meal_id=chosen_meal_id,
+    #     client_id=request.client_id,
+    #     action="SELECTION_CONFIRMED",
+    #     client_changes=json.dumps({"assignment_date": request.assignment_date})
+    # ))
 
     db.commit()
 
