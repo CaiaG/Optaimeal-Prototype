@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, UniqueConstraint, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, UniqueConstraint, Text, Date
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
@@ -6,14 +6,20 @@ from database import Base
 class Meal(Base):
     __tablename__ = "meals"
 
-    meal_id = Column(Integer, primary_key=True, index=True)
+    meal_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     meal_name = Column(String, index=True)
+    
     status = Column(String, default="Draft")
     calories_per_serving = Column(Float)
     nutritional_score = Column(Float)
     price_per_serving = Column(Float, nullable=True, default=0.0)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    parent_meal_id = Column(
+        Integer, ForeignKey("meals.meal_id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     meal_ingredients = relationship(
         "MealIngredients",
@@ -22,6 +28,7 @@ class Meal(Base):
     )
 
     assignments = relationship("MealAssignment", back_populates="meal")
+    change_logs = relationship("ChangeLog", back_populates="meal")
 
 
 class MealIngredients(Base):
@@ -78,6 +85,10 @@ class MealAssignment(Base):
     client = relationship("Client", back_populates="assignments")
     meal = relationship("Meal", back_populates="assignments")
 
+    log = relationship(
+        "MealAssignmentLog", back_populates="assignment", uselist=False, cascade="all, delete-orphan"
+    )
+
 class Client(Base):
     __tablename__ = "clients"
 
@@ -92,17 +103,59 @@ class Client(Base):
     assignments = relationship(
         "MealAssignment", back_populates="client", cascade="all, delete-orphan"
     )
-   
-class ExchangeLog(Base):
-    __tablename__ = "exchange_logs"
+
+# for meal edits
+class ChangeLog(Base):
+    """
+    Tracks Recipe & Ingredient Modifications made to meals (Operator or System edits).
+    """
+    __tablename__ = "change_logs"
 
     id = Column(Integer, primary_key=True, index=True)
     meal_id = Column(
-        Integer, ForeignKey("meals.meal_id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey("meals.meal_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    
+    action = Column(String, nullable=False)
+    changes = Column(JSON, nullable=True)
+    
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    meal = relationship("Meal", back_populates="change_logs")
+
+
+class MealAssignmentLog(Base):
+    """
+    Cumulative history tracking for a single calendar assignment slot over time.
+    """
+    __tablename__ = "meal_assignment_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    assignment_id = Column(
+        Integer,
+        ForeignKey("meal_assignments.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
     )
     client_id = Column(
-        Integer, ForeignKey("clients.client_id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey("clients.client_id", ondelete="CASCADE"), nullable=False, index=True
     )
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
-    action = Column(String, nullable=True)  # e.g., "SWAP", "DELETE", "UPDATE"
-    client_changes = Column(Text, nullable=True)
+    assignment_date = Column(Date, nullable=False, index=True)
+
+    current_meal_id = Column(
+        Integer, ForeignKey("meals.meal_id", ondelete="SET NULL"), nullable=True
+    )
+
+    old_meal_ids = Column(JSON, default=list, nullable=False)
+
+    change_history = Column(JSON, default=list, nullable=True)
+
+    action = Column(String, nullable=False)
+    source = Column(String, nullable=True) 
+    user_prompt = Column(Text, nullable=True)
+
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    assignment = relationship("MealAssignment", back_populates="log")

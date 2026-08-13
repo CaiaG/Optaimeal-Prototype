@@ -1,4 +1,4 @@
-export type MealStatus = 'Draft' | 'Active' | 'Archived';
+export type MealStatus = 'Draft' | 'Active' | 'Archived' | 'Scheduled';
 
 export interface MealPlan {
   meal_id: number | null;
@@ -69,8 +69,25 @@ export interface Assignment {
 export interface MealIngredient {
   ingredient_id: number | null;
   ingredient_name: string;
-  quantity: number;
+  ingredient_quantity: number;
   unit: string;
+}
+
+export interface MealCandidateOption {
+  meal_id?: number;
+  meal_name: string;
+  calories_per_serving?: number;
+  nutritional_score?: string | number;
+  ingredients?: string[];
+  is_edited_original?: boolean;
+  is_alternative?: boolean;
+}
+
+export interface ApplySelectionResponse {
+  message: string;
+  assignment_id: number;
+  assignment_date: string;
+  assigned_meal: any; 
 }
 
 export const parseIngredients = (
@@ -107,11 +124,11 @@ export const parseIngredients = (
 
       // Structured MealIngredient object (handles both quantity & ingredient_quantity keys)
       if (typeof item === 'object') {
-        const quantityVal = item.quantity ?? item.ingredient_quantity;
+        const quantityVal = item.ingredient_quantity;
         return {
           ingredient_id: item.ingredient_id ?? null,
           ingredient_name: item.ingredient_name || item.name || 'Unknown Ingredient',
-          quantity: quantityVal !== undefined && quantityVal !== null ? Number(quantityVal) : 1,
+          ingredient_quantity: quantityVal !== undefined && quantityVal !== null ? Number(quantityVal) : 1,
           unit: item.unit || 'unit',
         };
       }
@@ -124,7 +141,7 @@ export const parseIngredients = (
         return {
           ingredient_id: null,
           ingredient_name: str,
-          quantity: 1,
+          ingredient_quantity: 1,
           unit: 'unit',
         };
       }

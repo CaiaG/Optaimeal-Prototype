@@ -208,7 +208,7 @@ export default function PageOpp() {
           return {
             ingredient_id: null,
             ingredient_name: ing.trim(),
-            quantity: 1.0,
+            ingredient_quantity: 1.0,
             unit: 'unit',
           };
         }
@@ -216,7 +216,7 @@ export default function PageOpp() {
           ingredient_id: ing.ingredient_id ?? null,
           ingredient_name:
             ing.ingredient_name || ing.name || 'Unnamed Ingredient',
-          quantity: Number(ing.quantity) || 1.0,
+          ingredient_quantity: Number(ing.ingredient_quantity) || 1.0,
           unit: ing.unit || 'unit',
         };
       }
@@ -802,7 +802,7 @@ function GenerateView({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIngredient, setSelectedIngredient] = useState<MasterIngredient | null>(null);
-  const [quantity, setQuantity] = useState<number>(1);
+  const [ingredient_quantity, setQuantity] = useState<number>(1);
   const [unit, setUnit] = useState<string>('cups');
   const [isCreating, setIsCreating] = useState<boolean>(false);
 
@@ -826,7 +826,7 @@ function GenerateView({
     const newEntry: MealIngredient = {
       ingredient_id: ingredient.ingredient_id,
       ingredient_name: ingredient.ingredient_name,
-      quantity,
+      ingredient_quantity,
       unit,
     };
 
@@ -935,7 +935,7 @@ function GenerateView({
               {meal?.ingredients?.map((ing: MealIngredient, i: number) => (
                 <li key={`${ing.ingredient_id}-${i}`} className={styles.ingredient_item}>
                   <span>
-                    <strong>{ing.quantity} {ing.unit}</strong> - {ing.ingredient_name}
+                    <strong>{ing.ingredient_quantity} {ing.unit}</strong> - {ing.ingredient_name}
                   </span>
                   <button 
                     type="button"
@@ -968,7 +968,7 @@ function GenerateView({
                   type="number"
                   min="0.1"
                   step="0.1"
-                  value={quantity}
+                  value={ingredient_quantity}
                   onChange={(e) => setQuantity(Number(e.target.value))}
                   style={{ flex: 1, minWidth: '70px' }}
                 />
@@ -1223,14 +1223,18 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
     setLoading(true);
     try {
       const data = await apiFetch<any>(`/api/client/${clientId}/assignments`);
-      setAssignments(data);
+      
+      const assignmentArray = Array.isArray(data) 
+        ? data 
+        : (data?.assignments || []);
+
+      setAssignments(assignmentArray);
     } catch (err) {
       console.error('Error fetching assignments:', err);
     } finally {
       setLoading(false);
     }
   };
-  
 
     useEffect(() => {
       if (selectedClientId) {
@@ -1306,17 +1310,17 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
           const month = String(calendarDate.getMonth() + 1).padStart(2, '0');
           const d = String(day).padStart(2, '0');
           const dateKey = `${calendarDate.getFullYear()}-${month}-${d}`;          
-          
-          // 1. Check local state edits first
-          const localMeal = selectedClientId ? calendarAssignments[selectedClientId]?.[dateKey] : null;
+          // console.log("Calendar dateKey:", dateKey, "Assignments loaded:", assignments);
+          const localMeal = (selectedClientId && calendarAssignments?.[selectedClientId]) 
+            ? calendarAssignments[selectedClientId][dateKey] 
+            : null;
 
-          // 2. Fallback to live backend assignment for this date
-          const backendMeal = assignments.find(a => a.assignment_date === dateKey)?.meal?.meal_name;
+          const safeAssignments = Array.isArray(assignments) ? assignments : [];
+          const backendMatch = safeAssignments.find(a => a?.assignment_date === dateKey);
+          const backendMeal = backendMatch?.meal?.meal_name;
 
-          // 3. Display local edit if present, otherwise backend assignment
           const assignedMeal = localMeal || backendMeal;
-          const locked = isDateLocked(day); 
-
+          const locked = isDateLocked(day);
           return (
             <div 
               key={day} 

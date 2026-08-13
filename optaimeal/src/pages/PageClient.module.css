@@ -552,6 +552,7 @@ CSS
   border: 1px solid #ddd;
   background: #f9f9f9;
   border-radius: 8px;
+  max-width: 850px;
 }
 
 .chat_wrapper {
@@ -604,6 +605,7 @@ CSS
 /* Meal Option Card */
 .option_card {
   flex: 0 0 280px;
+  min-height: 380px;
   min-width: 280px;
   max-width: 320px;
   display: flex;
@@ -661,17 +663,18 @@ CSS
 }
 
 .ingredients_box {
-  max-height: 110px;
+  max-height: 300px;
   overflow-y: auto;
   font-size: 0.8rem;
   color: #334155;
+  text-indent: 5px;
   padding-right: 4px;
   margin-bottom: 0.75rem;
 }
 
 .ingredients_list {
   margin: 0;
-  padding-left: 1.1rem;
+  padding-left: 1 rem;
   list-style-type: disc;
 }
 
@@ -807,7 +810,9 @@ CSS
 }
 
 .meal_selector_box {
-  flex: 1; 
+  flex: 0 0 350px;
+  min-width: 320px;
+  
   border-left: 1px solid #ccc;
   padding: 10px;
   background: #f9f9f9;

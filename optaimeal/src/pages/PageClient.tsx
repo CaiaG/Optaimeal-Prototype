@@ -1,6 +1,6 @@
 import styles from './PageClient.module.css';
 import { useState } from 'react';
-import {type MealPlan, type MealIngredient, parseIngredients } from './types/mealplan';
+import {type MealPlan, type MealIngredient, parseIngredients, type MealCandidateOption, type ApplySelectionResponse } from './types/mealplan';
 import { apiFetch } from '../services/api';
 
 interface ChatViewProps {
@@ -134,7 +134,8 @@ export default function PageClient() {
     setIsSubmitting(true);
 
     try {
-      const data = await apiFetch<any>(`/api/client/${parsedId}/assignments`);
+      // const data = await apiFetch<any>(`/api/client/${parsedId}/assignments`);
+      const data = await apiFetch<any>(`/api/client/${parsedId}/assignments/week`);
 
       if (data.client?.population != null) {
         setNumStudents(data.client.population);
@@ -403,7 +404,7 @@ export default function PageClient() {
                   let displayText = '';
 
                   if (isObject) {
-                    const baseQty = ing.quantity ?? 1;
+                    const baseQty = ing.ingredient_quantity ?? 1;
                     // Scale quantity and round cleanly to max 2 decimal places (avoids floats like 0.30000000004)
                     const scaledQty = Number((baseQty * multiplier).toFixed(2));
                     const unitStr = ing.unit ? `${ing.unit} ` : '';
@@ -434,7 +435,8 @@ export default function PageClient() {
     const [isRegenerating, setIsRegenerating] = useState(false);
     const [isApplyingSelection, setIsApplyingSelection] = useState(false);
     const dayKey = selectedDay ? String(selectedDay) : '';
-    
+    const [isSendingChat, setIsSendingChat] = useState(false);
+
     // Derived Active States
     const activeHistory = dayKey
       ? chatHistories[dayKey] || [
@@ -474,11 +476,13 @@ export default function PageClient() {
       });
     };
 
-    const handleSendMessage = () => {
-      if (!chatInput.trim() || !selectedDay) return;
-      const userText = chatInput;
+    const handleSendMessage = async () => {
+      if (!chatInput.trim() || !selectedDay || isSendingChat) return;
+
+      const userText = chatInput.trim();
       setChatInput('');
 
+      // append User message to UI
       const userMsg: ChatMessage = {
         id: Date.now().toString(),
         sender: 'user',
@@ -487,14 +491,44 @@ export default function PageClient() {
       };
       appendMessage(userMsg);
 
-      // 2. Respond with a generic message instead of regenerating
-      const assistantMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: 'assistant',
-        text: "Thanks for your input! When you're ready to update the menu for this day, click 'Regenerate Meal with Constraints' below.",
-        timestamp: new Date(),
-      };
-      appendMessage(assistantMsg);
+      setIsSendingChat(true);
+
+      // Normalize date string (YYYY-MM-DD)
+      const dayKey = typeof selectedDay === 'string'
+        ? selectedDay
+        : (selectedDay as Date).toISOString().split('T')[0];
+
+      try {
+        // Fetch AI response from FastAPI backend
+        const data = await apiFetch<{ response: string }>('/api/client/menu/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: clientId,
+            assignment_date: dayKey,
+            message: userText,
+          }),
+        });
+
+        // Append Groq assistant response
+        const assistantMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          sender: 'assistant',
+          text: data.response,
+          timestamp: new Date(),
+        };
+        appendMessage(assistantMsg);
+
+      } catch (err: any) {
+        appendMessage({
+          id: (Date.now() + 1).toString(),
+          sender: 'assistant',
+          text: `Sorry, I ran into an error getting a response: ${err.message || 'Server error'}`,
+          timestamp: new Date(),
+        });
+      } finally {
+        setIsSendingChat(false);
+      }
     };
 
     const handleReset = () => {
@@ -644,7 +678,7 @@ export default function PageClient() {
           };
         });
 
-        console.log('Formatted Candidates to Save:', formattedCandidates);
+        // console.log('Formatted Candidates to Save:', formattedCandidates);
 
         if (formattedCandidates.length > 0) {
           setCandidateOptions((prev) => ({
@@ -667,44 +701,63 @@ export default function PageClient() {
       }
     };
 
-    const handleApplySelection = async (selectedOption: any) => {
-      if (!selectedDay) return;
+    const handleApplySelection = async (selectedOption: MealCandidateOption) => {
+      if (!selectedDay || !clientId) return;
+
       setIsApplyingSelection(true);
+      
+      // Ensure dayKey matches the date string format used in state keys ('YYYY-MM-DD')
+      const dayKey = typeof selectedDay === 'string' 
+        ? selectedDay 
+        : (selectedDay as Date).toISOString().split('T')[0];
 
       const payload = {
         client_id: clientId,
-        assignment_date: selectedDay,
-        selected_meal: selectedOption
+        assignment_date: dayKey,
+        selected_meal: {
+          meal_id: selectedOption.meal_id,
+          meal_name: selectedOption.meal_name,
+          calories_per_serving: selectedOption.calories_per_serving,
+          nutritional_score: selectedOption.nutritional_score,
+          ingredients: selectedOption.ingredients || [],
+          is_edited_original: Boolean(selectedOption.is_edited_original),
+          is_alternative: Boolean(selectedOption.is_alternative),
+        },
       };
 
       try {
-        const response = await apiFetch<{
-          message: string;
-          assigned_meal: any;
-        }>('/api/client/menu/apply-selection', {
-          method: 'POST',
-          body: JSON.stringify(payload)
-        });
+        const response = await apiFetch<ApplySelectionResponse>(
+          '/api/client/menu/apply-selection',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }
+        );
 
+        // Update top-level week state with the eager-loaded, database-persisted meal
         if (onMealUpdated && response.assigned_meal) {
           onMealUpdated(response.assigned_meal);
         }
 
+        // Clear candidate cards and low-stock flags for this specific day
         setCandidateOptions((prev) => ({ ...prev, [dayKey]: [] }));
         setAvailabilityMap((prev) => ({ ...prev, [dayKey]: {} }));
 
+        // Confirm action in chat stream
         appendMessage({
           id: Date.now().toString(),
           sender: 'system',
-          text: `Successfully assigned "${selectedOption.meal_name}" to ${dayKey}.`,
+          text: `Successfully assigned "${response.assigned_meal?.meal_name || selectedOption.meal_name}" to ${dayKey}.`,
           timestamp: new Date(),
         });
 
       } catch (err: any) {
+        console.error("Error applying selection:", err);
         appendMessage({
           id: Date.now().toString(),
           sender: 'assistant',
-          text: `Failed to update meal assignment: ${err.message}`,
+          text: `Failed to update meal assignment: ${err.message || 'Server error'}`,
           timestamp: new Date(),
         });
       } finally {
@@ -743,11 +796,32 @@ export default function PageClient() {
                 <div className={styles.options_scroll_row}>
                   {activeCandidateOptions.map((option, idx) => {
                     const ingredients = Array.isArray(option.ingredients) ? option.ingredients : [];
-                    const instructions = Array.isArray(option.instructions) ? option.instructions : [];
+
+                    // Normalize ingredients array to simple strings before sending to handler
+                    const handleSelect = () => {
+                      const normalizedOption = {
+                        ...option,
+                        ingredients: ingredients.map((ing: any) => {
+                          if (typeof ing === 'object' && ing !== null) {
+                            return {
+                              ingredient_name: ing.ingredient_name || ing.name,
+                              ingredient_quantity: ing.ingredient_quantity ?? ing.quantity ?? 1.0,
+                              unit: ing.unit || 'unit',
+                            };
+                          }
+                          return {
+                            ingredient_name: ing,
+                            ingredient_quantity: 1.0,
+                            unit: 'unit',
+                          };
+                        }),
+                      };
+                      handleApplySelection(normalizedOption);
+                    };
 
                     return (
                       <div 
-                        key={option.meal_id || idx}
+                        key={option.meal_id ? `${option.meal_id}-${idx}` : idx}
                         className={`${styles.option_card} ${option.is_edited_original ? styles.option_card_adjusted : ''}`}
                       >
                         <div>
@@ -761,8 +835,9 @@ export default function PageClient() {
 
                           {/* Nutrition & Servings */}
                           <div className={styles.nutrition_info}>
-                            <strong>{option.calories_per_serving ?? 'N/A'}</strong> kcal &bull; Score: <strong>{option.nutritional_score ?? 'N/A'}</strong>
-                            {option.servings ? ` • ${option.servings} Servings` : ''}
+                            <strong>{option.calories_per_serving ?? 'N/A'}</strong> kcal &bull; 
+                            Score: <strong>{option.nutritional_score ?? 'N/A'}</strong> &bull; 
+                            Servings: <strong>{numStudents}</strong>
                           </div>
 
                           {/* Ingredients */}
@@ -773,13 +848,19 @@ export default function PageClient() {
                                 <ul className={styles.ingredients_list}>
                                   {ingredients.map((ing: any, i: number) => {
                                     const isObj = typeof ing === 'object' && ing !== null;
-                                    const name = isObj ? ing.ingredient_name : ing;
-                                    const qty = isObj && ing.quantity ? `${ing.quantity}${ing.unit ? ' ' + ing.unit : ''}` : null;
+                                    const name = isObj ? (ing.ingredient_name || ing.name) : ing;
+                                    
+                                    // Uses ingredient_quantity with a safe fallback to quantity
+                                    const rawQty = isObj ? (ing.ingredient_quantity ?? ing.quantity) : null;
+                                    const qty = rawQty !== null && rawQty !== undefined 
+                                      ? `${rawQty}${ing.unit && ing.unit !== 'unit' ? ' ' + ing.unit : ''}` 
+                                      : null;
+                                      
                                     const status = isObj ? ing.status : null;
 
                                     return (
                                       <li key={i} className={styles.ingredient_item}>
-                                        {name} {qty && <span className={styles.ingredient_qty}>({qty})</span>}
+                                        {name} {qty && <span className={styles.ingredient_quantity}>({qty})</span>}
                                         {status && status !== 'available' && (
                                           <span className={status === 'substituted' ? styles.status_substituted : styles.status_alert}>
                                             [{status}]
@@ -792,21 +873,11 @@ export default function PageClient() {
                               </div>
                             </div>
                           )}
-
-                          {/* Preparation Steps */}
-                          {instructions.length > 0 && (
-                            <div className={styles.instructions_container}>
-                              <div className={styles.section_label}>Preparation Steps</div>
-                              <p className={styles.instructions_text}>
-                                {instructions.join(' ')}
-                              </p>
-                            </div>
-                          )}
                         </div>
 
                         {/* Select Button */}
                         <button
-                          onClick={() => handleApplySelection(option)}
+                          onClick={handleSelect}
                           disabled={isApplyingSelection}
                           className={styles.select_button}
                         >
@@ -880,7 +951,7 @@ export default function PageClient() {
                       const ingName = isObject ? ing.ingredient_name : ing;
                       const ingKey = isObject ? (ing.ingredient_id ?? ingName) : ingName;
 
-                      const perServingQty = isObject ? (ing.quantity ?? 1) : 1;
+                      const perServingQty = isObject ? (ing.ingredient_quantity ?? 1) : 1;
                       const totalQty = perServingQty * (Number(numStudents) || 1);
                       const unit = isObject ? (ing.unit ?? '') : '';
 
