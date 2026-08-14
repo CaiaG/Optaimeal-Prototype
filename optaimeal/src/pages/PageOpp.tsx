@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient, type CreateIngredientPayload} from './types/mealplan';
+import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient, type CreateIngredientPayload} from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 
 // --- Types & Interfaces ---
@@ -1213,6 +1213,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
   
   const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
   const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
+  // loading not in use
   const [loading, setLoading] = useState<boolean>(false);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
 

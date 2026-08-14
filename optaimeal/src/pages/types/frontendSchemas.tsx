@@ -97,7 +97,7 @@ export const parseIngredients = (
 
   let raw: any[] = [];
 
-  // 1. Parse string inputs (JSON stringified array OR comma-separated string)
+  // Parse string inputs (JSON stringified array OR comma-separated string)
   if (typeof ingredients === 'string') {
     const trimmed = ingredients.trim();
     if (!trimmed) return [];
@@ -117,8 +117,9 @@ export const parseIngredients = (
     raw = ingredients;
   }
 
-  // 2. Normalize every item into a valid MealIngredient object
+  // Normalize every item into a valid MealIngredient object
   return raw
+  // index not in use
     .map((item, index) => {
       if (!item) return null;
 

@@ -1,6 +1,6 @@
 import styles from './PageClient.module.css';
 import { useState } from 'react';
-import {type MealPlan, type MealIngredient, parseIngredients, type MealCandidateOption, type ApplySelectionResponse } from './types/mealplan';
+import {type MealPlan, type MealIngredient, parseIngredients, type MealCandidateOption, type ApplySelectionResponse } from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 
 interface ChatViewProps {

@@ -565,7 +565,7 @@ def assign_menu_to_client(
     }
 
 
-# Access accumulated reports of client changes. UNIMPLEMENTED
+# Access accumulated reports of client changes: UNIMPLEMENTED
 @app.get("/api/operator/menu/analytics")
 def get_menu_analytics(db: Session = Depends(database.get_db)):
     return
