@@ -10,6 +10,8 @@ from dotenv import load_dotenv, find_dotenv
 from groq import Groq
 from typing import Dict, Any, List, Optional
 import models, database 
+import statemachine
+from statemachine import AssignmentStatus, MealStatus
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -314,9 +316,50 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
             detail="Archived meals are locked and cannot be edited."
         )
 
+    # STATE MACHINE
+    if not statemachine.can_edit_meal_in_place(existing_meal):
+        # Active meal: shared by >=1 live assignment, so we never mutate it
+        # directly. Fork a new Draft meal carrying the requested edits; the
+        # caller repoints whichever assignment(s) should use it (e.g. via
+        # /api/operator/menu/assign).
+        forked = statemachine.fork_meal(
+            db,
+            meal_name=meal_data.meal_name,
+            calories_per_serving=meal_data.calories_per_serving,
+            nutritional_score=meal_data.nutritional_score,
+            price_per_serving=meal_data.price_per_serving,
+            ingredients=[item.model_dump() for item in meal_data.ingredients],
+            parent_meal_id=existing_meal.meal_id,
+        )
+ 
+        db.add(
+            models.ChangeLog(
+                meal_id=existing_meal.meal_id,
+                action="FORK_ON_EDIT",
+                changes={
+                    "forked_meal_id": forked.meal_id,
+                    "reason": "Original meal is Active; edits create a new version instead of mutating shared data.",
+                },
+            )
+        )
+        db.commit()
+ 
+        forked_full = (
+            db.query(models.Meal)
+            .options(
+                joinedload(models.Meal.meal_ingredients).joinedload(
+                    models.MealIngredients.ingredient
+                )
+            )
+            .filter(models.Meal.meal_id == forked.meal_id)
+            .first()
+        )
+        return format_meal(forked_full)
+
+
     existing_meal.meal_name = meal_data.meal_name
     existing_meal.parent_meal_id = meal_data.parent_meal_id
-    existing_meal.status = meal_data.status
+    # existing_meal.status = meal_data.status
     existing_meal.calories_per_serving = meal_data.calories_per_serving
     existing_meal.nutritional_score = meal_data.nutritional_score
     existing_meal.price_per_serving = meal_data.price_per_serving
@@ -356,18 +399,16 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
 
     
 
-    changelog_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "action": "MEAL_UPDATE",
-        "meal_id": meal_id,
-        "meal_name": existing_meal.meal_name,
-        "source": "API_MANUAL_UPDATE",
-        "details": f"Meal '{existing_meal.meal_name}' (ID: {meal_id}) updated.",
-    }
-
-    meal_history = list(getattr(existing_meal, "change_history", []) or [])
-    meal_history.append(changelog_entry)
-    existing_meal.change_history = meal_history
+    db.add(
+        models.ChangeLog(
+            meal_id=meal_id,
+            action="MEAL_UPDATE",
+            changes={
+                "meal_name": existing_meal.meal_name,
+                "source": "API_MANUAL_UPDATE",
+            },
+        )
+    )
 
     db.commit()
 
@@ -430,9 +471,21 @@ def assign_menu_to_client(
         if request.price_per_serving is not None
         else (meal.price_per_serving or 0.0)
     )
-    assigned_status = request.status or "Scheduled"
+    # assigned_status = request.status or "Scheduled"
+    assigned_status = statemachine.resolve_assignment_status(request.assignment_date)
 
     if existing_assignment:
+        statemachine.sync_assignment_status(existing_assignment)
+        if not statemachine.can_operator_edit_assignment(existing_assignment):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"This assignment is '{existing_assignment.status}' and "
+                    "locked for operator edits."
+                ),
+            )
+
+
         previous_meal_id = existing_assignment.meal_id
 
         # Update existing record
@@ -499,20 +552,13 @@ def assign_menu_to_client(
 
         # Revert previous meal to "Draft" ONLY if no other assignments reference it
         if previous_meal_id and previous_meal_id != request.meal_id:
-            remaining_assignments = (
-                db.query(models.MealAssignment)
-                .filter(models.MealAssignment.meal_id == previous_meal_id)
+            previous_meal = (
+                db.query(models.Meal)
+                .filter(models.Meal.meal_id == previous_meal_id)
                 .first()
             )
-
-            if not remaining_assignments:
-                previous_meal = (
-                    db.query(models.Meal)
-                    .filter(models.Meal.meal_id == previous_meal_id)
-                    .first()
-                )
-                if previous_meal:
-                    previous_meal.status = "Draft"
+            if previous_meal:
+                statemachine.sync_meal_status(previous_meal, db)
 
     else:
         # Create new assignment
@@ -546,7 +592,7 @@ def assign_menu_to_client(
         )
         db.add(new_log)
 
-    meal.status = "Scheduled"
+    statemachine.sync_meal_status(meal, db)
     db.commit()
 
     date_str = request.assignment_date.isoformat()
@@ -632,7 +678,8 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
     new_meal = models.Meal(
         meal_name=meal_data.meal_name.strip(),
         parent_meal_id=meal_data.parent_meal_id,
-        status=meal_data.status,
+        # status=meal_data.status,
+        status=MealStatus.DRAFT,
         calories_per_serving=meal_data.calories_per_serving,
         nutritional_score=meal_data.nutritional_score,
         price_per_serving=meal_data.price_per_serving,
@@ -717,64 +764,26 @@ def get_client_assignments(
         .all()
     )
 
-    today = date.today()
-    today_str = today.isoformat()  # String format for safe DB string comparison
-    needs_commit = False
-    checked_meal_ids = set()
-
-    for assignment in assignments:
-        # Safely parse assignment_date
-        asgn_date = (
-            date.fromisoformat(assignment.assignment_date)
-            if isinstance(assignment.assignment_date, str)
-            else assignment.assignment_date
-        )
-
-        # Update assignment status if scheduled on or before today
-        if asgn_date <= today and assignment.status == "Scheduled":
-            assignment.status = "Active"
-            needs_commit = True
-
-        # Check if the assigned meal needs to transition to "Active"
-        meal = assignment.meal
-        if meal and meal.meal_id not in checked_meal_ids:
-            checked_meal_ids.add(meal.meal_id)
-
-            if meal.status != "Active" and meal.status != "Archived":
-                # Use today_str for safe string comparison in SQLite
-                has_active_trigger = (
-                    db.query(models.MealAssignment)
-                    .filter(
-                        models.MealAssignment.meal_id == meal.meal_id,
-                        models.MealAssignment.assignment_date <= today_str,
-                    )
-                    .first()
-                ) is not None
-
-                if has_active_trigger:
-                    meal.status = "Active"
-                    needs_commit = True
-
-    if needs_commit:
-        db.commit()
-
+    statemachine.sync_assignments(assignments, db)
     result = []
+
     for assignment in assignments:
-        result.append(
-            {
-                "assignment_id": assignment.id,
-                "client_id": assignment.client_id,
-                "assignment_date": assignment.assignment_date,
-                "status": assignment.status,
-                "price_per_serving": getattr(
-                    assignment, "price_per_serving", 0.0
-                ),
-                # If meal is None, return null safely instead of skipping
-                "meal": format_meal(assignment.meal)
-                if assignment.meal
-                else None,
-            }
-        )
+            result.append(
+                {
+                    "assignment_id": assignment.id,
+                    "client_id": assignment.client_id,
+                    "assignment_date": assignment.assignment_date,
+                    "status": assignment.status,
+                    "price_per_serving": getattr(
+                        assignment, "price_per_serving", 0.0
+                    ),
+                    # If meal is None, return null safely instead of skipping
+                    "meal": format_meal(assignment.meal)
+                    if assignment.meal
+                    else None,
+                }
+            )
+ 
 
     return {
         "client": {
@@ -818,42 +827,7 @@ def get_client_weekly_assignments(client_id: int, db: Session = Depends(database
         .all()
     )
 
-    needs_commit = False
-    checked_meal_ids = set()
-
-    for assignment in assignments:
-        
-
-        asgn_date = (
-                    date.fromisoformat(assignment.assignment_date)
-                    if isinstance(assignment.assignment_date, str)
-                    else assignment.assignment_date
-                )
-        
-        if asgn_date <= today and assignment.status == "Scheduled":
-            assignment.status = "Active"
-            needs_commit = True
-
-        meal = assignment.meal
-        if meal and meal.meal_id not in checked_meal_ids:
-            checked_meal_ids.add(meal.meal_id)
-
-            if meal.status != "Active" and meal.status != "Archived":
-                has_active_trigger = (
-                    db.query(models.MealAssignment)
-                    .filter(
-                        models.MealAssignment.meal_id == meal.meal_id,
-                        models.MealAssignment.assignment_date <= today
-                    )
-                    .first()
-                ) is not None
-
-                if has_active_trigger:
-                    meal.status = "Active"
-                    needs_commit = True
-
-    if needs_commit:
-        db.commit()
+    statemachine.sync_assignments(assignments, db)
 
     result = []
     for assignment in assignments:
@@ -899,47 +873,6 @@ def create_client(payload: ClientCreate, db: Session = Depends(database.get_db))
     db.refresh(new_client)
     return new_client
 
-# not using anywhere tbh --> prob delete soon
-@app.get("/api/client/menu/current/{client_id}")
-def get_current_menu(client_id: int, db: Session = Depends(database.get_db)):
-    # Fetch latest assignment with pre-loaded meal and ingredients 
-    assignment = (
-        db.query(models.MealAssignment)
-        .options(
-            joinedload(models.MealAssignment.meal)
-            .joinedload(models.Meal.meal_ingredients)
-            .joinedload(models.MealIngredients.ingredient)
-        )
-        .filter(models.MealAssignment.client_id == client_id)
-        .order_by(models.MealAssignment.assignment_date.desc())
-        .first()
-    )
-
-    if not assignment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"No menu assignment found for client ID {client_id}"
-        )
-
-    meal = assignment.meal
-    if not meal or meal.status != "Active":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Active menu not found for this assignment"
-        )
-
-    
-    formatted_meal = format_meal(meal)
-    
-    return {
-        "assignment_id": assignment.id,
-        "client_id": assignment.client_id,
-        "assignment_date": str(assignment.assignment_date),
-        "assignment_status": assignment.status,
-        "assignment_price_per_serving": assignment.price_per_serving,
-        **formatted_meal
-    }
-
 
 # EXHANGE LOG REFAC
 @app.post("/api/chat/regenerate-meal", response_model=RegenerateResponse)
@@ -961,6 +894,30 @@ def regenerate_meal_options(
     if not meal:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Meal not found"
+        )
+
+    assignment = (
+        db.query(models.MealAssignment)
+        .filter(
+            models.MealAssignment.client_id == request.client_id,
+            models.MealAssignment.assignment_date == request.assignment_date,
+        )
+        .first()
+    )
+
+    if not assignment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No assignment found for client {request.client_id} on {request.assignment_date}",
+        )
+ 
+    statemachine.sync_assignment_status(assignment)
+    db.commit()
+
+    if not statemachine.can_client_edit_assignment(assignment):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This assignment is '{assignment.status}' and cannot be regenerated by the client.",
         )
 
     # Extract ingredient list correctly from relational model
@@ -999,8 +956,8 @@ def regenerate_meal_options(
             "edited_meal": {{
                 "meal_id": {meal.meal_id},
                 "meal_name": "Adjusted Meal Name",
-                "calories_per_serving": {meal.calories_per_serving or 500},
-                "nutritional_score": "{meal.nutritional_score or '8.0'}",
+                "calories_per_serving": {meal.calories_per_serving or 0},
+                "nutritional_score": "{meal.nutritional_score or '0.0'}",
                 "ingredients": [
                     {{
                         "ingredient_name": "Ingredient 1",
@@ -1098,6 +1055,15 @@ def apply_meal_selection(
             detail=f"No meal assignment found for client {request.client_id} on {request.assignment_date}",
         )
 
+    statemachine.sync_assignment_status(assignment)
+    db.commit()
+ 
+    if not statemachine.can_client_edit_assignment(assignment):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This assignment is '{assignment.status}' and cannot be modified by the client.",
+        )
+    
     previous_meal_id = assignment.meal_id
     selected = request.selected_meal or {}
 
@@ -1122,9 +1088,10 @@ def apply_meal_selection(
         chosen_meal = models.Meal(
             meal_name=selected.get("meal_name", "Adapted Meal").strip(),
             parent_meal_id=previous_meal_id if is_edited else None,
-            status="Active",
+            # status="Active",
+            status=MealStatus.DRAFT,
             calories_per_serving=selected.get("calories_per_serving"),
-            nutritional_score=str(selected.get("nutritional_score", "8.0")),
+            nutritional_score=str(selected.get("nutritional_score", "0.0")),
         )
         db.add(chosen_meal)
         db.flush()  # Generates chosen_meal.meal_id
@@ -1175,8 +1142,8 @@ def apply_meal_selection(
 
     # Update the assignment to point to chosen_meal
     assignment.meal_id = chosen_meal.meal_id
-    chosen_meal.status = "Active"
     db.flush()
+    
 
     log = (
         db.query(models.MealAssignmentLog)
@@ -1219,22 +1186,16 @@ def apply_meal_selection(
         )
         db.add(log)
 
-    # Clean up previous meal status if no other active assignments use it
+    # Let the state machine decide whether the previous meal reverts to Draft
     if previous_meal_id and previous_meal_id != chosen_meal.meal_id:
-        remaining_assignments = (
-            db.query(models.MealAssignment)
-            .filter(models.MealAssignment.meal_id == previous_meal_id)
+        prev_meal = (
+            db.query(models.Meal)
+            .filter(models.Meal.meal_id == previous_meal_id)
             .first()
         )
-        if not remaining_assignments:
-            prev_meal = (
-                db.query(models.Meal)
-                .filter(models.Meal.meal_id == previous_meal_id)
-                .first()
-            )
-            if prev_meal and prev_meal.status != "Archived":
-                prev_meal.status = "Draft"
-
+        if prev_meal:
+            statemachine.sync_meal_status(prev_meal, db)
+ 
     db.commit()
 
     # Eager load full meal details for UI return payload
