@@ -546,7 +546,7 @@ def assign_menu_to_client(
         )
         db.add(new_log)
 
-    meal.status = "SCHEDULED"
+    meal.status = "Scheduled"
     db.commit()
 
     date_str = request.assignment_date.isoformat()
@@ -1077,7 +1077,7 @@ def regenerate_meal_options(
             detail=f"Groq API Error: {str(e)}",
         )
 
-# UNTESTED
+# UNTESTED/UNIMPLEMENTED
 @app.post("/api/client/menu/apply-selection")
 def apply_meal_selection(
     request: ApplySelectionRequest, db: Session = Depends(database.get_db)
