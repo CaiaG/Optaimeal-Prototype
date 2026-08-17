@@ -49,7 +49,10 @@ interface SavedViewProps {
   onBack: () => void;
 }
 
-
+interface AnalyticsViewProps {
+  meals: MealPlan[];
+  clients: Client[];
+}
 
 
 // --- Main Application Component ---
@@ -430,6 +433,7 @@ export default function PageOpp() {
           <button className={styles.top_sidebar_btn} onClick={() => handleNavigation('generate')}>Generate</button>
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('calendar')}>Calendar</button>
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('saved')}>Saved</button>
+          <button className={styles.top_sidebar_btn} onClick={() => setActiveView('analytics')}>Analytics</button>
         </nav>
 
         {/*client list */}
@@ -550,6 +554,12 @@ export default function PageOpp() {
             meals={meals} 
             onEdit={(m: MealPlan) => handleNavigation('generate', m)} 
             onBack={() => setActiveView('home')} 
+          />
+        )}
+        {activeView === 'analytics' && (
+          <AnalyticsView 
+            meals={meals} 
+            clients={clients} 
           />
         )}
       </main>
@@ -1425,6 +1435,81 @@ function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
             </button>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// --- ANALYTICS VIEW SUB-COMPONENT ---
+function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
+  const totalMeals = meals.length;
+  const activeMealsCount = meals.filter(m => m.status?.toLowerCase() === 'active').length;
+  const draftMealsCount = meals.filter(m => m.status?.toLowerCase() === 'draft' || !m.status).length;
+
+  const totalCalories = meals.reduce((acc, m) => acc + (Number(m.calories_per_serving) || 0), 0);
+  const avgCalories = totalMeals > 0 ? Math.round(totalCalories / totalMeals) : 0;
+
+  const totalNutritionalScore = meals.reduce((acc, m) => acc + (Number(m.nutritional_score) || 0), 0);
+  const avgNutritionalScore = totalMeals > 0 ? (totalNutritionalScore / totalMeals).toFixed(1) : '0.0';
+
+  const totalClients = clients.length;
+
+  return (
+    <div className={`${styles.analytics_container} ${styles.animate_mount}`}>
+      <header className={styles.analytics_header}>
+        <h2>Performance & Menu Analytics</h2>
+        <p>Comprehensive insights into your menu catalog, nutritional averages, and client engagement.</p>
+      </header>
+
+      {/* Metric Cards Grid */}
+      <div className={styles.analytics_metrics_grid}>
+        <div className={styles.analytics_metric_card}>
+          <span>Total Meals Catalog</span>
+          <strong className={styles.analytics_val_primary}>{totalMeals}</strong>
+        </div>
+        <div className={styles.analytics_metric_card}>
+          <span>Active Plans</span>
+          <strong className={styles.analytics_val_success}>{activeMealsCount}</strong>
+        </div>
+        <div className={styles.analytics_metric_card}>
+          <span>Drafts in Progress</span>
+          <strong className={styles.analytics_val_warning}>{draftMealsCount}</strong>
+        </div>
+        <div className={styles.analytics_metric_card}>
+          <span>Registered Clients</span>
+          <strong className={styles.analytics_val_info}>{totalClients}</strong>
+        </div>
+      </div>
+
+      {/* Detailed Analytics Breakdown Cards */}
+      <div className={styles.analytics_sections_grid}>
+        <div className={styles.analytics_panel}>
+          <h4>Nutritional Overview</h4>
+          <div className={styles.analytics_list}>
+            <div className={styles.analytics_row}>
+              <span>Average Calories / Serving</span>
+              <strong>{avgCalories} kcal</strong>
+            </div>
+            <div className={styles.analytics_row}>
+              <span>Average Nutritional Score</span>
+              <strong>{avgNutritionalScore} / 10</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.analytics_panel}>
+          <h4>Catalog Status Distribution</h4>
+          <div className={styles.analytics_list}>
+            <div className={styles.analytics_row}>
+              <span>Active Percentage</span>
+              <strong>{totalMeals > 0 ? Math.round((activeMealsCount / totalMeals) * 100) : 0}%</strong>
+            </div>
+            <div className={styles.analytics_row}>
+              <span>Draft Percentage</span>
+              <strong>{totalMeals > 0 ? Math.round((draftMealsCount / totalMeals) * 100) : 0}%</strong>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

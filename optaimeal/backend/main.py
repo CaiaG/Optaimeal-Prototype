@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 import models, database 
 import statemachine
 from statemachine import AssignmentStatus, MealStatus
+import analytics
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -212,6 +213,42 @@ class OperatorChatRequest(BaseModel):
     insufficient_ingredients: Optional[List[str]] = []
     message: str
     chat_history: Optional[List[ChatMessagePayload]] = []
+
+# ==========================================
+# Analytics Schemas
+# ==========================================
+ 
+class AnalyticsChangeEntry(BaseModel):
+    assignment_id: Optional[int] = None
+    client_id: Optional[int] = None
+    client_name: Optional[str] = None
+    assignment_date: Optional[str] = None
+    timestamp: Optional[str] = None
+    action: Optional[str] = None
+    source: Optional[str] = None
+    source_category: str = "UNKNOWN"  # CLIENT / OPERATOR / UNKNOWN
+    previous_meal_id: Optional[int] = None
+    previous_meal_name: Optional[str] = None
+    new_meal_id: Optional[int] = None
+    new_meal_name: Optional[str] = None
+ 
+ 
+class AnalyticsClientCount(BaseModel):
+    client_id: Optional[int] = None
+    count: int
+ 
+ 
+class AnalyticsSummary(BaseModel):
+    total_changes: int
+    by_action: Dict[str, int] = {}
+    by_source: Dict[str, int] = {}
+    by_client: List[AnalyticsClientCount] = []
+ 
+ 
+class MenuAnalyticsResponse(BaseModel):
+    summary: AnalyticsSummary
+    entries: List[AnalyticsChangeEntry] = []
+
 
 # ==========================================
 # Helper Formatter Function
@@ -626,8 +663,23 @@ def assign_menu_to_client(
 
 # Access accumulated reports of client changes: UNIMPLEMENTED
 @app.get("/api/operator/menu/analytics")
-def get_menu_analytics(db: Session = Depends(database.get_db)):
-    return
+def get_menu_analytics(
+    client_id: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(database.get_db),
+):
+    if client_id is not None:
+        client = db.query(models.Client).filter(models.Client.client_id == client_id).first()
+        if not client:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Client with ID {client_id} not found",
+            )
+ 
+    return analytics.get_menu_analytics(
+        db, client_id=client_id, start_date=start_date, end_date=end_date
+    )
 
 
 # ==========================================

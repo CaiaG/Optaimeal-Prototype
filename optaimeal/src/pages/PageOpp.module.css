@@ -1075,3 +1075,132 @@
   box-shadow: 0 10px 25px rgba(0,0,0,0.2);
   color: #333; 
 }
+
+/* ==========================================
+   Analytics View Dedicated Styles
+   ========================================== */
+
+.analytics_container {
+  padding: 2.5rem;
+  overflow-y: auto;
+  height: 100%;
+  background-color: #f9fafb;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.analytics_header {
+  margin-bottom: 2rem;
+}
+
+.analytics_header h2 {
+  font-size: 1.85rem;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 0.4rem;
+}
+
+.analytics_header p {
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
+.analytics_metrics_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.analytics_metric_card {
+  background: #ffffff;
+  padding: 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid #e5e7eb;
+}
+
+.analytics_metric_card span {
+  font-size: 0.875rem;
+  color: #6b7280;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.analytics_val_primary {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #0056b3;
+}
+
+.analytics_val_success {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #28a745;
+}
+
+.analytics_val_warning {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #d97706;
+}
+
+.analytics_val_info {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #17a2b8;
+}
+
+.analytics_sections_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.analytics_panel {
+  background: #ffffff;
+  padding: 1.75rem;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+}
+
+.analytics_panel h4 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid #f3f4f6;
+  padding-bottom: 0.75rem;
+}
+
+.analytics_list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.analytics_row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 0.95rem;
+  color: #4b5563;
+}
+
+.analytics_row:last-child {
+  border-bottom: none;
+}
+
+.analytics_row strong {
+  color: #111827;
+  font-weight: 600;
+}
