@@ -857,3 +857,98 @@ CSS
   background: #3498db;
 }
 
+/* calendar */
+
+
+/* CALENDAR STUFF */
+.calendar_view_area {
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  
+}
+
+.calendar_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #eee;
+  padding-bottom: 15px;
+}
+
+.month_nav {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.month_nav h2 {
+  margin: 0;
+  min-width: 200px;
+  text-align: center;
+}
+
+.calendar_grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr); 
+  gap: 10px;
+}
+
+.day_label {
+  text-align: center;
+  font-weight: bold;
+  color: #777;
+  padding: 10px 0;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+}
+
+.calendar_cell {
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  min-height: 100px;
+  padding: 8px;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+
+.calendar_cell:hover {
+  background: #fff5f5; 
+  transform: translateY(-2px);
+  position: relative;
+}
+
+
+.cell_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.cell_date {
+  font-weight: bold;
+  font-size: 0.9rem;
+  margin-bottom: 5px;
+}
+
+.assignment_tag {
+  background: #cc2b2b; 
+  color: white;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-top: auto;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day_empty {
+  background: transparent;
+}

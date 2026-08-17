@@ -1,6 +1,6 @@
 import styles from './PageClient.module.css';
-import { useState } from 'react';
-import {type MealPlan, type MealIngredient, parseIngredients, type MealCandidateOption, type ApplySelectionResponse } from './types/frontendSchemas';
+import { useState, useEffect } from 'react';
+import {type MealPlan, type MealIngredient, parseIngredients, type MealCandidateOption, type ApplySelectionResponse, type Client, type Assignment } from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 
 interface ChatViewProps {
@@ -18,6 +18,9 @@ interface ChatViewProps {
   setCandidateOptions: React.Dispatch<React.SetStateAction<Record<string, any[]>>>;
 }
 
+interface CalendarViewProps {
+  clientId: number | null;
+}
 
 interface ChatMessage {
   id: string;
@@ -271,10 +274,10 @@ export default function PageClient() {
       )}
 
       {activeView === 'calendar' && (
-        <div className={styles.view_card}>
-          <h2>Weekly Calendar View</h2>
-          <p className={styles.placeholder_text}>Calendar component coming soon.</p>
-        </div>
+         <CalendarView 
+          
+          clientId={clientId}
+          />
       )}
     </main>
     </div>
@@ -1021,4 +1024,115 @@ export default function PageClient() {
       </div>
     );
   }
+}
+
+function CalendarView({ clientId }: CalendarViewProps) {
+  type CalendarAssignments = Record<number, Record<string, string>>;
+
+  const [calendarDate, setCalendarDate] = useState<Date>(new Date());
+  
+  const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
+  const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
+  // loading not in use
+  const [loading, setLoading] = useState<boolean>(false);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+
+  const daysInMonth = (month: number, year: number): number => new Date(year, month + 1, 0).getDate();
+  const startDayOfMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay();
+
+  const fetchClientAssignments = async (clientId: number) => {
+    setLoading(true);
+    try {
+      const data = await apiFetch<any>(`/api/client/${clientId}/assignments`);
+      
+      const assignmentArray = Array.isArray(data) 
+        ? data 
+        : (data?.assignments || []);
+
+      setAssignments(assignmentArray);
+    } catch (err) {
+      console.error('Error fetching assignments:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+    useEffect(() => {
+      if (clientId) {
+        fetchClientAssignments(clientId);
+      }
+    }, [clientId]);
+
+  
+  const AnimatedCalendarWrapper = ({ children }: { children: React.ReactNode }) => (
+    <section className={`${styles.calendar_view} ${styles.animate_mount}`}>
+      {children}
+    </section>
+  );
+
+  // add handler for pushing meals
+  return (
+    <AnimatedCalendarWrapper>
+      <header className={styles.calendar_header}>
+        
+            
+        <div className={styles.month_nav}>
+          <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))}>
+            &lt; Prev
+          </button>
+          <h2>{calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h2>
+          <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))}>
+            Next &gt;
+          </button>
+        </div>
+      </header>
+
+      <div className={styles.calendar_grid}>
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+          <div key={d} className={styles.day_label}>{d}</div>
+        ))}
+            
+        {[...Array(startDayOfMonth)].map((_, i) => (
+          <div key={`pad-${i}`} className={styles.day_empty} />
+        ))}
+
+        {[...Array(daysInMonth(calendarDate.getMonth(), calendarDate.getFullYear()))].map((_, i) => {
+          const day = i + 1;
+          const month = String(calendarDate.getMonth() + 1).padStart(2, '0');
+          const d = String(day).padStart(2, '0');
+          const dateKey = `${calendarDate.getFullYear()}-${month}-${d}`;          
+          // console.log("Calendar dateKey:", dateKey, "Assignments loaded:", assignments);
+          const localMeal = (clientId && calendarAssignments?.[clientId]) 
+            ? calendarAssignments[clientId][dateKey] 
+            : null;
+
+          const safeAssignments = Array.isArray(assignments) ? assignments : [];
+          const backendMatch = safeAssignments.find(a => a?.assignment_date === dateKey);
+          const backendMeal = backendMatch?.meal?.meal_name;
+
+          const assignedMeal = localMeal || backendMeal;
+          return (
+            <div 
+              key={day} 
+              className={`${styles.calendar_cell}`}
+              onClick={() => setActiveMenuDate(dateKey)} 
+            >                    
+              <div className={styles.cell_header}>
+                <span className={styles.cell_date}>{day}</span>
+                
+              </div>
+              
+              {assignedMeal && (
+                <div className={styles.assignment_tag}>
+                  {assignedMeal}
+                </div>
+              )}                  
+              
+                               
+            </div>
+          );
+        })}
+      </div> 
+    </AnimatedCalendarWrapper>
+  );
 }

@@ -430,6 +430,7 @@ export default function PageOpp() {
     <div className={styles.opp_container}>
       <aside className={styles.sidebar_wrapper}>
         <nav className={styles.top_sidebar}>
+          // this aint right
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('home')}>Main</button>
           <button className={styles.top_sidebar_btn} onClick={() => handleNavigation('generate')}>Generate</button>
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('calendar')}>Calendar</button>
@@ -999,12 +1000,14 @@ function GenerateView({
                   onChange={(e) => setUnit(e.target.value)} 
                   style={{ flex: 1 }}
                 >
-                  <option value="cups">cups</option>
                   <option value="g">g</option>
-                  <option value="oz">oz</option>
+                  <option value="cups">cups</option>
+                  <option value="whole">whole</option>
+                  <option value="ml">ml</option>
                   <option value="tbsp">tbsp</option>
                   <option value="tsp">tsp</option>
-                  <option value="whole">whole</option>
+                  <option value="slice">slice</option>
+                  
                 </select>
               </div>
 
@@ -1441,19 +1444,27 @@ function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
   );
 }
 
+// --- COMPONENT ---
 function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
-  const totalMeals = meals?.length || 0;
-  const activeMealsCount = meals?.filter(m => m.status?.toLowerCase() === 'active').length || 0;
-  
+  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'pricing'>('overview');
+  const [selectedClientId, setSelectedClientId] = useState<string>('');
+
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  const totalMeals = meals?.length || 0;
+  const activeMealsCount = meals?.filter(m => m.status?.toLowerCase() === 'active').length || 0;
 
   useEffect(() => {
     const fetchAnalytics = async () => {
       try {
         setLoading(true);
-        const data = await apiFetch<AnalyticsResponse>('/api/operator/menu/analytics');
+        let endpoint = '/api/operator/menu/analytics';
+        if (activeTab === 'clients' && selectedClientId) {
+          endpoint += `?client_id=${selectedClientId}`;
+        }
+        const data = await apiFetch<AnalyticsResponse>(endpoint);
         setAnalytics(data);
       } catch (err: any) {
         setError(err.message || 'Failed to fetch analytics data');
@@ -1463,7 +1474,7 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
     };
 
     fetchAnalytics();
-  }, []);
+  }, [activeTab, selectedClientId]);
 
   const formatDate = (isoString: string) => {
     try {
@@ -1485,115 +1496,171 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
         <p>Comprehensive insights into your menu catalog, operational changes, and client engagement.</p>
       </header>
 
-      {/* Top-Level Catalog & Endpoint Metrics */}
-      <div className={styles.analytics_metrics_grid}>
-        <div className={styles.analytics_metric_card}>
-          <span>Total Meals Catalog</span>
-          <strong className={styles.analytics_val_primary}>{totalMeals}</strong>
-        </div>
-        <div className={styles.analytics_metric_card}>
-          <span>Active Plans</span>
-          <strong className={styles.analytics_val_success}>{activeMealsCount}</strong>
-        </div>
-        <div className={styles.analytics_metric_card}>
-          <span>Client-Driven Changes</span>
-          <strong className={styles.analytics_val_info}>
-            {analytics?.summary.by_source['CLIENT'] || 0}
-          </strong>
-        </div>
-        <div className={styles.analytics_metric_card}>
-          <span>Operator Overwrites</span>
-          <strong className={styles.analytics_val_warning}>
-            {analytics?.summary.by_source['OPERATOR'] || 0}
-          </strong>
-        </div>
+      {/* Tab Navigation Bar */}
+      <div className={styles.analytics_tabs}>
+        <button 
+          className={`${styles.analytics_tab_btn} ${activeTab === 'overview' ? styles.active_tab : ''}`}
+          onClick={() => setActiveTab('overview')}
+        >
+          Overview & Activity
+        </button>
+        <button 
+          className={`${styles.analytics_tab_btn} ${activeTab === 'clients' ? styles.active_tab : ''}`}
+          onClick={() => setActiveTab('clients')}
+        >
+          Client Analytics
+        </button>
+        <button 
+          className={`${styles.analytics_tab_btn} ${activeTab === 'pricing' ? styles.active_tab : ''}`}
+          onClick={() => setActiveTab('pricing')}
+        >
+          Pricing & Ingredient Trends
+        </button>
       </div>
 
-      <div className={styles.analytics_sections_grid}>
-        {/* Activity Log Panel */}
-        <div className={`${styles.analytics_panel} ${styles.analytics_panel_large}`}>
-          <h4>Recent Menu Activity (Next-Day Surfaced)</h4>
-          
-          {loading ? (
-            <div className={styles.analytics_loading}>Loading analytics data...</div>
-          ) : error ? (
-            <div className={styles.analytics_error}>{error} (error) </div>
-          ) : analytics?.entries && analytics.entries.length > 0 ? (
-            <div className={styles.analytics_log_table_wrapper}>
-              <table className={styles.analytics_log_table}>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Source</th>
-                    <th>Action</th>
-                    <th>Client</th>
-                    <th>Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analytics.entries.map((entry, idx) => (
-                    <tr key={idx}>
-                      <td className={styles.analytics_log_time}>
-                        {formatDate(entry.timestamp)}
-                      </td>
-                      <td>
-                        <span className={`${styles.analytics_badge} ${styles[`badge_${entry.source_category.toLowerCase()}`]}`}>
-                          {entry.source_category}
-                        </span>
-                      </td>
-                      <td className={styles.analytics_log_action}>
-                        {entry.action.replace(/_/g, ' ')}
-                      </td>
-                      <td>
-                        {entry.client_name ? (
-                          <span className={styles.analytics_client_tag}>{entry.client_name}</span>
-                        ) : (
-                          <span className={styles.analytics_system_tag}>Global / System</span>
-                        )}
-                      </td>
-                      <td className={styles.analytics_log_details}>
-                        {entry.previous_meal_name && entry.new_meal_name ? (
-                          <>
-                            <span className={styles.analytics_strike}>{entry.previous_meal_name}</span> 
-                            <span className={styles.analytics_arrow}>&rarr;</span> 
-                            <strong>{entry.new_meal_name}</strong>
-                          </>
-                        ) : entry.new_meal_name ? (
-                          <strong>{entry.new_meal_name}</strong>
-                        ) : entry.changes ? (
-                          <span className={styles.analytics_changes_json}>
-                            {Object.entries(entry.changes).map(([k, v]) => `${k}: ${v}`).join(', ')}
-                          </span>
-                        ) : (
-                          <span className={styles.analytics_muted}>No meal details</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {/* TAB 1: OVERVIEW & ACTIVITY */}
+      {activeTab === 'overview' && (
+        <div className={styles.tab_content}>
+          {/* Top-Level Catalog & Endpoint Metrics */}
+          <div className={styles.analytics_metrics_grid}>
+            <div className={styles.analytics_metric_card}>
+              <span>Total Meals Catalog</span>
+              <strong className={styles.analytics_val_primary}>{totalMeals}</strong>
             </div>
-          ) : (
-             <div className={styles.analytics_empty}>No surfaced activity logged yet.</div>
-          )}
-        </div>
+            <div className={styles.analytics_metric_card}>
+              <span>Active Plans</span>
+              <strong className={styles.analytics_val_success}>{activeMealsCount}</strong>
+            </div>
+            <div className={styles.analytics_metric_card}>
+              <span>Client-Driven Changes</span>
+              <strong className={styles.analytics_val_info}>
+                {analytics?.summary.by_source['CLIENT'] || 0}
+              </strong>
+            </div>
+            <div className={styles.analytics_metric_card}>
+              <span>Operator Overwrites</span>
+              <strong className={styles.analytics_val_warning}>
+                {analytics?.summary.by_source['OPERATOR'] || 0}
+              </strong>
+            </div>
+          </div>
 
-        {/* Change Breakdown Panel */}
-        <div className={styles.analytics_panel}>
-          <h4>Change Breakdown by Action</h4>
-          <div className={styles.analytics_list}>
-            {analytics?.summary.by_action && Object.entries(analytics.summary.by_action).map(([action, count]) => (
-              <div className={styles.analytics_row} key={action}>
-                <span className={styles.analytics_action_name}>{action.replace(/_/g, ' ')}</span>
-                <strong>{count}</strong>
+          <div className={styles.analytics_sections_grid}>
+            {/* Activity Log Panel */}
+            <div className={`${styles.analytics_panel} ${styles.analytics_panel_large}`}>
+              <h4>Recent Menu Activity (Next-Day Surfaced)</h4>
+              
+              {loading ? (
+                <div className={styles.analytics_loading}>Loading analytics data...</div>
+              ) : error ? (
+                <div className={styles.analytics_error}>{error}</div>
+              ) : analytics?.entries && analytics.entries.length > 0 ? (
+                <div className={styles.analytics_log_table_wrapper}>
+                  <table className={styles.analytics_log_table}>
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Source</th>
+                        <th>Action</th>
+                        <th>Client</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analytics.entries.map((entry, idx) => (
+                        <tr key={idx}>
+                          <td className={styles.analytics_log_time}>
+                            {formatDate(entry.timestamp)}
+                          </td>
+                          <td>
+                            <span className={`${styles.analytics_badge} ${styles[`badge_${entry.source_category.toLowerCase()}`]}`}>
+                              {entry.source_category}
+                            </span>
+                          </td>
+                          <td className={styles.analytics_log_action}>
+                            {entry.action.replace(/_/g, ' ')}
+                          </td>
+                          <td>
+                            {entry.client_name ? (
+                              <span className={styles.analytics_client_tag}>{entry.client_name}</span>
+                            ) : (
+                              <span className={styles.analytics_system_tag}>Global / System</span>
+                            )}
+                          </td>
+                          <td className={styles.analytics_log_details}>
+                            {entry.previous_meal_name && entry.new_meal_name ? (
+                              <>
+                                <span className={styles.analytics_strike}>{entry.previous_meal_name}</span> 
+                                <span className={styles.analytics_arrow}>&rarr;</span> 
+                                <strong>{entry.new_meal_name}</strong>
+                              </>
+                            ) : entry.new_meal_name ? (
+                              <strong>{entry.new_meal_name}</strong>
+                            ) : entry.changes ? (
+                              <span className={styles.analytics_changes_json}>
+                                {Object.entries(entry.changes).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                              </span>
+                            ) : (
+                              <span className={styles.analytics_muted}>No meal details</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                 <div className={styles.analytics_empty}>No surfaced activity logged yet.</div>
+              )}
+            </div>
+
+            {/* Change Breakdown Panel */}
+            <div className={styles.analytics_panel}>
+              <h4>Change Breakdown by Action</h4>
+              <div className={styles.analytics_list}>
+                {analytics?.summary.by_action && Object.entries(analytics.summary.by_action).map(([action, count]) => (
+                  <div className={styles.analytics_row} key={action}>
+                    <span className={styles.analytics_action_name}>{action.replace(/_/g, ' ')}</span>
+                    <strong>{count}</strong>
+                  </div>
+                ))}
+                {!analytics?.summary.by_action || Object.keys(analytics.summary.by_action).length === 0 ? (
+                  <div className={styles.analytics_empty_small}>No actions recorded</div>
+                ) : null}
               </div>
-            ))}
-            {!analytics?.summary.by_action || Object.keys(analytics.summary.by_action).length === 0 ? (
-              <div className={styles.analytics_empty_small}>No actions recorded</div>
-            ) : null}
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* TAB 2: CLIENT ANALYTICS */}
+      {activeTab === 'clients' && (
+        <div className={styles.tab_content}>
+          <div className={styles.filter_toolbar}>
+            <label>Select Client: </label>
+            <select 
+              value={selectedClientId} 
+              onChange={(e) => setSelectedClientId(e.target.value)}
+              className={styles.analytics_select}
+            >
+              <option value="">-- All Clients --</option>
+              {clients.map(c => (
+                <option key={c.client_id} value={c.client_id}>{c.client_name}</option>
+              ))}
+            </select>
+          </div>
+          {/* Client-specific metrics and view can go here */}
+        </div>
+      )}
+
+      {/* TAB 3: PRICING & INGREDIENT TRENDS */}
+      {activeTab === 'pricing' && (
+        <div className={styles.tab_content}>
+          <h4>Meal & Ingredient Cost Evolution</h4>
+          <p className={styles.analytics_subtext}>Tracking historical modifications and price adjustments over time.</p>
+          {/* Pricing trend tables can go here */}
+        </div>
+      )}
     </div>
   );
 }

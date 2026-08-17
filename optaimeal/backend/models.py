@@ -57,8 +57,8 @@ class Ingredient(Base):
     season = Column(String, nullable=True)
     availability = Column(String, nullable=True)
 
+    # add nutrition values
     substitutes = Column(JSON, nullable=True, default=list)
-    # maybe a list of possible substitutes?
 
 # client id & assignment date pairs should be unique
 class MealAssignment(Base):
