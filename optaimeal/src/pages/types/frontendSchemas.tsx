@@ -90,6 +90,34 @@ export interface ApplySelectionResponse {
   assigned_meal: any; 
 }
 
+export interface AnalyticsSummary {
+  total_changes: number;
+  by_action: Record<string, number>;
+  by_source: Record<string, number>;
+  by_client: { client_id: number; count: number }[];
+}
+
+export interface AnalyticsEntry {
+  assignment_id: number | null;
+  client_id: number | null;
+  assignment_date: string | null;
+  timestamp: string;
+  action: string;
+  changes?: Record<string, any>;
+  source: string;
+  source_category: string;
+  previous_meal_id: number | null;
+  new_meal_id: number | null;
+  client_name: string | null;
+  previous_meal_name: string | null;
+  new_meal_name: string | null;
+}
+
+export interface AnalyticsResponse {
+  summary: AnalyticsSummary;
+  entries: AnalyticsEntry[];
+
+}
 export const parseIngredients = (
   ingredients: MealIngredient[] | string[] | string | undefined | null
 ): MealIngredient[] => {

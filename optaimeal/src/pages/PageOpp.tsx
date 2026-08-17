@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styles from './PageOpp.module.css';
-import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, type MealIngredient, type CreateIngredientPayload} from './types/frontendSchemas';
+import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, 
+  type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary} from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 
 // --- Types & Interfaces ---
@@ -1440,28 +1441,51 @@ function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
   );
 }
 
-// --- ANALYTICS VIEW SUB-COMPONENT ---
 function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
-  const totalMeals = meals.length;
-  const activeMealsCount = meals.filter(m => m.status?.toLowerCase() === 'active').length;
-  const draftMealsCount = meals.filter(m => m.status?.toLowerCase() === 'draft' || !m.status).length;
+  const totalMeals = meals?.length || 0;
+  const activeMealsCount = meals?.filter(m => m.status?.toLowerCase() === 'active').length || 0;
+  
+  const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const totalCalories = meals.reduce((acc, m) => acc + (Number(m.calories_per_serving) || 0), 0);
-  const avgCalories = totalMeals > 0 ? Math.round(totalCalories / totalMeals) : 0;
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        setLoading(true);
+        const data = await apiFetch<AnalyticsResponse>('/api/operator/menu/analytics');
+        setAnalytics(data);
+      } catch (err: any) {
+        setError(err.message || 'Failed to fetch analytics data');
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  const totalNutritionalScore = meals.reduce((acc, m) => acc + (Number(m.nutritional_score) || 0), 0);
-  const avgNutritionalScore = totalMeals > 0 ? (totalNutritionalScore / totalMeals).toFixed(1) : '0.0';
+    fetchAnalytics();
+  }, []);
 
-  const totalClients = clients.length;
+  const formatDate = (isoString: string) => {
+    try {
+      return new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      }).format(new Date(isoString));
+    } catch {
+      return isoString;
+    }
+  };
 
   return (
     <div className={`${styles.analytics_container} ${styles.animate_mount}`}>
       <header className={styles.analytics_header}>
         <h2>Performance & Menu Analytics</h2>
-        <p>Comprehensive insights into your menu catalog, nutritional averages, and client engagement.</p>
+        <p>Comprehensive insights into your menu catalog, operational changes, and client engagement.</p>
       </header>
 
-      {/* Metric Cards Grid */}
+      {/* Top-Level Catalog & Endpoint Metrics */}
       <div className={styles.analytics_metrics_grid}>
         <div className={styles.analytics_metric_card}>
           <span>Total Meals Catalog</span>
@@ -1472,42 +1496,101 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
           <strong className={styles.analytics_val_success}>{activeMealsCount}</strong>
         </div>
         <div className={styles.analytics_metric_card}>
-          <span>Drafts in Progress</span>
-          <strong className={styles.analytics_val_warning}>{draftMealsCount}</strong>
+          <span>Client-Driven Changes</span>
+          <strong className={styles.analytics_val_info}>
+            {analytics?.summary.by_source['CLIENT'] || 0}
+          </strong>
         </div>
         <div className={styles.analytics_metric_card}>
-          <span>Registered Clients</span>
-          <strong className={styles.analytics_val_info}>{totalClients}</strong>
+          <span>Operator Overwrites</span>
+          <strong className={styles.analytics_val_warning}>
+            {analytics?.summary.by_source['OPERATOR'] || 0}
+          </strong>
         </div>
       </div>
 
-      {/* Detailed Analytics Breakdown Cards */}
       <div className={styles.analytics_sections_grid}>
-        <div className={styles.analytics_panel}>
-          <h4>Nutritional Overview</h4>
-          <div className={styles.analytics_list}>
-            <div className={styles.analytics_row}>
-              <span>Average Calories / Serving</span>
-              <strong>{avgCalories} kcal</strong>
+        {/* Activity Log Panel */}
+        <div className={`${styles.analytics_panel} ${styles.analytics_panel_large}`}>
+          <h4>Recent Menu Activity (Next-Day Surfaced)</h4>
+          
+          {loading ? (
+            <div className={styles.analytics_loading}>Loading analytics data...</div>
+          ) : error ? (
+            <div className={styles.analytics_error}>{error} (error) </div>
+          ) : analytics?.entries && analytics.entries.length > 0 ? (
+            <div className={styles.analytics_log_table_wrapper}>
+              <table className={styles.analytics_log_table}>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Source</th>
+                    <th>Action</th>
+                    <th>Client</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analytics.entries.map((entry, idx) => (
+                    <tr key={idx}>
+                      <td className={styles.analytics_log_time}>
+                        {formatDate(entry.timestamp)}
+                      </td>
+                      <td>
+                        <span className={`${styles.analytics_badge} ${styles[`badge_${entry.source_category.toLowerCase()}`]}`}>
+                          {entry.source_category}
+                        </span>
+                      </td>
+                      <td className={styles.analytics_log_action}>
+                        {entry.action.replace(/_/g, ' ')}
+                      </td>
+                      <td>
+                        {entry.client_name ? (
+                          <span className={styles.analytics_client_tag}>{entry.client_name}</span>
+                        ) : (
+                          <span className={styles.analytics_system_tag}>Global / System</span>
+                        )}
+                      </td>
+                      <td className={styles.analytics_log_details}>
+                        {entry.previous_meal_name && entry.new_meal_name ? (
+                          <>
+                            <span className={styles.analytics_strike}>{entry.previous_meal_name}</span> 
+                            <span className={styles.analytics_arrow}>&rarr;</span> 
+                            <strong>{entry.new_meal_name}</strong>
+                          </>
+                        ) : entry.new_meal_name ? (
+                          <strong>{entry.new_meal_name}</strong>
+                        ) : entry.changes ? (
+                          <span className={styles.analytics_changes_json}>
+                            {Object.entries(entry.changes).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                          </span>
+                        ) : (
+                          <span className={styles.analytics_muted}>No meal details</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <div className={styles.analytics_row}>
-              <span>Average Nutritional Score</span>
-              <strong>{avgNutritionalScore} / 10</strong>
-            </div>
-          </div>
+          ) : (
+             <div className={styles.analytics_empty}>No surfaced activity logged yet.</div>
+          )}
         </div>
 
+        {/* Change Breakdown Panel */}
         <div className={styles.analytics_panel}>
-          <h4>Catalog Status Distribution</h4>
+          <h4>Change Breakdown by Action</h4>
           <div className={styles.analytics_list}>
-            <div className={styles.analytics_row}>
-              <span>Active Percentage</span>
-              <strong>{totalMeals > 0 ? Math.round((activeMealsCount / totalMeals) * 100) : 0}%</strong>
-            </div>
-            <div className={styles.analytics_row}>
-              <span>Draft Percentage</span>
-              <strong>{totalMeals > 0 ? Math.round((draftMealsCount / totalMeals) * 100) : 0}%</strong>
-            </div>
+            {analytics?.summary.by_action && Object.entries(analytics.summary.by_action).map(([action, count]) => (
+              <div className={styles.analytics_row} key={action}>
+                <span className={styles.analytics_action_name}>{action.replace(/_/g, ' ')}</span>
+                <strong>{count}</strong>
+              </div>
+            ))}
+            {!analytics?.summary.by_action || Object.keys(analytics.summary.by_action).length === 0 ? (
+              <div className={styles.analytics_empty_small}>No actions recorded</div>
+            ) : null}
           </div>
         </div>
       </div>

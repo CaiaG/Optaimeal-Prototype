@@ -1204,3 +1204,153 @@
   color: #111827;
   font-weight: 600;
 }
+
+/* ==========================================
+   Analytics View - Endpoint Additions
+   ========================================== */
+
+.analytics_panel_large {
+  grid-column: span 2;
+}
+
+@media (max-width: 1024px) {
+  .analytics_panel_large {
+    grid-column: span 1;
+  }
+}
+
+.analytics_loading,
+.analytics_error,
+.analytics_empty {
+  padding: 2rem;
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.95rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px dashed #d1d5db;
+}
+
+.analytics_error {
+  color: #dc2626;
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.analytics_empty_small {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  font-style: italic;
+  padding: 0.5rem 0;
+}
+
+/* Log Table Styles */
+.analytics_log_table_wrapper {
+  overflow-x: auto;
+}
+
+.analytics_log_table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.analytics_log_table th {
+  padding: 0.75rem 1rem;
+  background-color: #f9fafb;
+  color: #4b5563;
+  font-weight: 600;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.analytics_log_table td {
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #f3f4f6;
+  color: #1f2937;
+  vertical-align: middle;
+}
+
+.analytics_log_table tr:last-child td {
+  border-bottom: none;
+}
+
+.analytics_log_time {
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.analytics_log_action {
+  text-transform: capitalize;
+  font-weight: 500;
+}
+
+.analytics_log_details span {
+  text-decoration: line-through;
+  color: #9ca3af;
+  margin-right: 0.4rem;
+}
+
+/* Badges for Source Category */
+.analytics_badge {
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge_client {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.badge_operator {
+  background-color: #ffedd5;
+  color: #c2410c;
+}
+
+.badge_unknown {
+  background-color: #f3f4f6;
+  color: #4b5563;
+}
+
+.analytics_client_tag {
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.analytics_system_tag {
+  font-size: 0.8rem;
+  color: #6b7280;
+  background-color: #f3f4f6;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-style: italic;
+}
+
+.analytics_strike {
+  text-decoration: line-through;
+  color: #9ca3af;
+  margin-right: 0.3rem;
+}
+
+.analytics_arrow {
+  margin: 0 0.3rem;
+  color: #9ca3af;
+}
+
+.analytics_changes_json {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: #4b5563;
+  background: #f9fafb;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}
+
+.analytics_muted {
+  color: #9ca3af;
+  font-style: italic;
+}
