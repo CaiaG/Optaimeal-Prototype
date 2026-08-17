@@ -200,6 +200,19 @@ class ApplySelectionRequest(BaseModel):
     assignment_date: str
     selected_meal: dict
 
+class ChatMessagePayload(BaseModel):
+    role: str  # 'user' or 'assistant'
+    content: str
+
+class OperatorChatRequest(BaseModel):
+    client_id: Optional[int] = None
+    assignment_date: Optional[str] = None
+    current_meal_name: Optional[str] = None
+    unavailable_ingredients: Optional[List[str]] = []
+    insufficient_ingredients: Optional[List[str]] = []
+    message: str
+    chat_history: Optional[List[ChatMessagePayload]] = []
+
 # ==========================================
 # Helper Formatter Function
 # ==========================================
@@ -1007,7 +1020,7 @@ def regenerate_meal_options(
     # Call Groq API with JSON mode
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0.7,
@@ -1256,7 +1269,7 @@ def chat_with_groq(
     # Call Groq API
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.message},
@@ -1276,4 +1289,47 @@ def chat_with_groq(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Groq API Error: {str(e)}",
+        )
+
+@app.post("/api/operator/menu/chat")
+def operator_meal_generation_chat(
+    request: OperatorChatRequest, db: Session = Depends(database.get_db)):
+    meal_context = f"Currently editing meal: '{request.current_meal_name}'." if request.current_meal_name else "No active meal selected for editing yet."
+
+    system_prompt = (
+        "You are an expert AI culinary assistant and institutional meal planning advisor "
+        "helping a facility operator formulate, modify, and optimize recipes. "
+        f"{meal_context} "
+        "Provide clear, practical, and creative culinary advice, suggest ingredient substitutions "
+        "that work around the listed inventory constraints, and help tailor recipes for batch serving."
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    if request.chat_history:
+        for msg in request.chat_history:
+            role = "assistant" if msg.role == "assistant" else "user"
+            messages.append({"role": role, "content": msg.content})
+
+    messages.append({"role": "user", "content": request.message})
+
+    try:
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=400,
+        )
+
+        response_text = completion.choices[0].message.content
+
+        return {
+            "response": response_text,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Groq Chat API Error: {str(e)}",
         )

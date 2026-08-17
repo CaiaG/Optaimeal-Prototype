@@ -120,45 +120,54 @@ export default function PageOpp() {
     setActiveView(view);
   };
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (chatInput.trim() === '') return;
 
-    const newMessage = { sender: 'User', text: chatInput };
-    setChatHistory((prev) => [...prev, newMessage]);
-
-    const cleanPrompt = chatInput.toLowerCase().trim();
+    const userMessageText = chatInput;
+    const userMessage = { sender: 'User', text: userMessageText };
+    
+    // Optimistically update chat history with the user's message
+    setChatHistory((prev) => [...prev, userMessage]);
     setChatInput('');
 
-    // MOCK EXAMPLE FOR CHATBOT INTERACTION
-    if (cleanPrompt.includes('calculate nutrition score')) {
-      // Generate a random integer score between 0 and 10
-      const mockScore = Math.floor(Math.random() * 11);
+    try {
+     
+      const chatContext = chatHistory.map((msg) => ({
+        role: msg.sender.toLowerCase() === 'user' ? 'user' : 'assistant',
+        content: msg.text,
+      }));
 
-      setTimeout(() => {
-        setSelectedMeal((prev: any) => ({
-          ...prev,
-          nutritional_score: mockScore,
-        }));
+      // Construct payload using operator-side context variables available in your state
+      const payload = {
+        current_meal_name: selectedMeal?.meal_name || null,
+        message: userMessageText,
+        chat_history: chatContext,
+      };
 
-        // 2. Append assistant response directly to chat history
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            sender: 'System',
-            text: `Based on the current ingredient breakdown, I've calculated a Nutritional Score of **${mockScore}/10**. I've updated the meal metrics for you!`,
-          },
-        ]);
-      }, 600);
+      // Call your backend endpoint using apiFetch
+      const data = await apiFetch<any>('/api/operator/menu/chat', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
 
-      return; // Exit early so general feedback timeout doesn't fire
-    }
-
-    setTimeout(() => {
       setChatHistory((prev) => [
         ...prev,
-        { sender: 'System', text: 'Feedback received.' },
+        {
+          sender: 'System', 
+          text: data.response || 'No response received from assistant.',
+        },
       ]);
-    }, 1000);
+
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      setChatHistory((prev) => [
+        ...prev,
+        {
+          sender: 'System',
+          text: 'Sorry, I encountered an error connecting to the AI assistant. Please try again.',
+        },
+      ]);
+    }
   };
 
   const handleResetChat = () => {

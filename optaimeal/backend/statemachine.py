@@ -14,9 +14,30 @@ the rules only live in one place.
 
 from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
+import os
 from sqlalchemy.orm import Session
 
 import models
+
+
+# "Today" for meal-day purposes is a calendar day, not a UTC instant - using
+# naive UTC time would make assignments flip Archived/Locked at the wrong
+# wall-clock moment for anyone not in UTC. Defaults to Eastern for now
+# (dev/testing phase) via env var override - switch the default below to
+# Africa/Nairobi (or set MEAL_DAY_TIMEZONE=Africa/Nairobi wherever this is
+# deployed) once you're testing against/for actual Kenya-based users.
+# If clients ever span multiple timezones, this should become a per-Client
+# field instead of a single global setting.
+REFERENCE_TZ = ZoneInfo(os.environ.get("MEAL_DAY_TIMEZONE", "America/New_York"))
+
+
+def _local_now(now: Optional[datetime] = None) -> datetime:
+    """Returns a timezone-aware 'now' in REFERENCE_TZ. Naive `now` args
+    (e.g. from tests) are assumed to already be in REFERENCE_TZ."""
+    if now is not None:
+        return now if now.tzinfo else now.replace(tzinfo=REFERENCE_TZ)
+    return datetime.now(REFERENCE_TZ)
 
 
 # ==========================================
@@ -50,7 +71,7 @@ def week_lock_boundary(assignment_date: date) -> datetime:
     that week's Monday (per spec, not per individual day).
     """
     monday = _monday_of(assignment_date)
-    return datetime.combine(monday, datetime.min.time()) - timedelta(hours=24)
+    return datetime.combine(monday, datetime.min.time(), tzinfo=REFERENCE_TZ) - timedelta(hours=24)
 
 
 def resolve_assignment_status(assignment_date: date, now: Optional[datetime] = None) -> str:
@@ -58,7 +79,7 @@ def resolve_assignment_status(assignment_date: date, now: Optional[datetime] = N
     Pure function: given a date, what SHOULD the assignment's status be right now?
     Does not touch the DB - callers persist the result via sync_assignment_status.
     """
-    now = now or datetime.utcnow()
+    now = _local_now(now)
     today = now.date()
 
     if assignment_date < today:
@@ -152,8 +173,24 @@ def can_operator_edit_assignment(assignment: "models.MealAssignment") -> bool:
     return assignment.status == AssignmentStatus.SCHEDULED
 
 
-def can_client_edit_assignment(assignment: "models.MealAssignment") -> bool:
-    return assignment.status == AssignmentStatus.LOCKED
+def can_client_edit_assignment(assignment: "models.MealAssignment", now: Optional[datetime] = None) -> bool:
+    """
+    Client edits (regenerate/apply-selection) are only allowed on the actual
+    cook day, not any time during the Locked week. Locked just means
+    "operator can't touch it anymore" - it does NOT mean "client can touch
+    it yet." A Thursday assignment is Locked from Sunday night onward, but
+    should only be client-editable ON Thursday.
+    """
+    if assignment.status != AssignmentStatus.LOCKED:
+        return False
+
+    asgn_date = (
+        date.fromisoformat(assignment.assignment_date)
+        if isinstance(assignment.assignment_date, str)
+        else assignment.assignment_date
+    )
+    today = (now or datetime.utcnow()).date()
+    return asgn_date == today
 
 
 def can_edit_meal_in_place(meal: "models.Meal") -> bool:
@@ -172,23 +209,23 @@ def can_assign_meal(meal: "models.Meal") -> bool:
 
 def fork_meal(
     db: Session,
-    original: "models.Meal",
     meal_name: str,
     calories_per_serving: float,
     nutritional_score: float,
     price_per_serving: float,
     ingredients: list,
+    parent_meal_id: Optional[int] = None,
 ) -> "models.Meal":
     """
-    Creates a new Meal row (Draft) with parent_meal_id = original.meal_id,
-    copying over the given (already-edited) fields and ingredient list.
-    Does NOT touch the original meal or any assignment - the caller
-    (operator edit route, or apply-selection) is responsible for repointing
-    only the specific assignment(s) it intends to update.
+    Creates a new Meal row (Draft) with parent_meal_id set, copying over the
+    given (already-edited) fields and ingredient list. Does NOT touch the
+    original meal or any assignment - the caller (operator edit route, or
+    apply-selection) is responsible for repointing only the specific
+    assignment(s) it intends to update.
     """
     new_meal = models.Meal(
         meal_name=meal_name.strip(),
-        parent_meal_id=original.meal_id,
+        parent_meal_id=parent_meal_id,
         status=MealStatus.DRAFT,  # becomes Active automatically once assigned
         calories_per_serving=calories_per_serving,
         nutritional_score=nutritional_score,
