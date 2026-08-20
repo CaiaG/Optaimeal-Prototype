@@ -34,7 +34,7 @@ export interface CreateIngredientPayload {
   location?: string | null;
   season?: string | null;
   availability?: string | null;
-  substitutes?: string[];
+  substitutes?: string[] | null;
 }
 
 export interface MasterIngredient {
@@ -46,7 +46,7 @@ export interface MasterIngredient {
   location?: string | null;
   season?: string | null;
   availability?: string | null;
-  substitutes?: string[];
+  substitutes?: string[] | null;
 }
 
 export interface Client {
@@ -179,3 +179,44 @@ export const parseIngredients = (
     })
     .filter((item): item is MealIngredient => item !== null);
 };
+
+// --- Meal & Ingredient Breakdown Types (GET /api/meal/{id}/breakdown) ---
+export interface MealIngredientBreakdown {
+  ingredient_id: number;
+  ingredient_name: string;
+  category?: string | null;
+  quantity: number;
+  unit: string;
+  price_per_unit?: number;
+  cost_contribution: number;
+  macros: Record<string, number>;
+  micros: Record<string, number>;
+  has_nutrition_data: boolean;
+}
+
+export interface MealBreakdownTotals {
+  total_cost: number;
+  energy_kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carb_g: number;
+  fibre_g: number;
+  vitamin_a_mcg: number;
+  vitamin_c_mg: number;
+  vitamin_b6_mg: number;
+  vitamin_b12_mcg: number;
+  iron_mg: number;
+  zinc_mg: number;
+  thiamin_mg: number;
+  riboflavin_mg: number;
+}
+
+export interface MealBreakdownResponse {
+  meal_id: number;
+  meal_name: string;
+  status: string;
+  price_per_serving: number;
+  calories_per_serving: number;
+  ingredients: MealIngredientBreakdown[];
+  totals: MealBreakdownTotals;
+}

@@ -1,4 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, UniqueConstraint, Text, Date
+
+
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
@@ -52,6 +54,8 @@ class Ingredient(Base):
     ingredient_name = Column(String, index=True)
     category = Column(String, nullable=True)
     unit = Column(String, default="unit")
+    # 2 decimal vals
+
     price_per_unit = Column(Float, nullable=True)
     location = Column(String, nullable=True)
     season = Column(String, nullable=True)
@@ -59,6 +63,42 @@ class Ingredient(Base):
 
     # add nutrition values
     substitutes = Column(JSON, nullable=True, default=list)
+
+    nutrition = relationship(
+        "IngredientNutrition", 
+        uselist=False, 
+        back_populates="ingredient", 
+        cascade="all, delete-orphan"
+    )
+
+# per 100g/ml
+class IngredientNutrition(Base):
+    __tablename__ = "ingredient_nutrition"
+
+    nutrition_id = Column(Integer, primary_key=True, index=True)
+    ingredient_id = Column(Integer, ForeignKey("ingredients.ingredient_id"), unique=True, nullable=False)
+
+    serving_size = Column(Float, default=100.0)
+    serving_unit = Column(String, default="g")
+    
+    # Macros
+    energy_kcal = Column(Float, default=0.0)
+    protein_g = Column(Float, default=0.0)
+    fat_g = Column(Float, default=0.0)
+    carb_g = Column(Float, default=0.0)
+    fibre_g = Column(Float, default=0.0)
+
+    # Micros
+    vitamin_a_mcg = Column(Float, default=0.0)
+    vitamin_c_mg = Column(Float, default=0.0)
+    vitamin_b6_mg = Column(Float, default=0.0)
+    vitamin_b12_mcg = Column(Float, default=0.0)
+    iron_mg = Column(Float, default=0.0)
+    zinc_mg = Column(Float, default=0.0)
+    thiamin_mg = Column(Float, default=0.0)
+    riboflavin_mg = Column(Float, default=0.0)
+
+    ingredient = relationship("Ingredient", back_populates="nutrition")
 
 # client id & assignment date pairs should be unique
 class MealAssignment(Base):
@@ -76,7 +116,7 @@ class MealAssignment(Base):
     meal_id = Column(
         Integer, ForeignKey("meals.meal_id", ondelete="CASCADE"), index=True
     )
-    assignment_date = Column(String, index=True)  # Format: YYYY-MM-DD
+    assignment_date = Column(Date, index=True)
     status = Column(String, default="Draft")
     price_per_serving = Column(Float, nullable=True, default=0.0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

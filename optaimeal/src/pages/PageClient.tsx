@@ -317,17 +317,34 @@ export default function PageClient() {
         </nav>
         
         <aside className={styles.mini_calendar}>
+          <div className={styles.calendar_header}>Weekly Menu</div>
           {assignments.map((m: MealPlan) => {
             const isSelected = String(selectedDay) === String(m.assignment_date);
-            
+
+            // Helper to format date string (e.g., "Monday", "10/24")
+            const formatDayLabel = (dateString: string) => {
+              try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return { day: 'Day', date: dateString };
+                
+                const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+                const monthDay = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' });
+                return { day: dayName, date: monthDay };
+              } catch (e) {
+                return { day: 'Day', date: dateString };
+              }
+            };
+
+            const { day, date } = formatDayLabel(m.assignment_date);
+
             return (
               <button 
                 key={m.assignment_date} 
-                // Join the classes properly
                 className={`${styles.mini_calendar_btns} ${isSelected ? styles.active : ''}`}
                 onClick={() => onDaySelect(m.assignment_date)}
               >
-                {m.assignment_date}
+                <span className={styles.calendar_day_label}>{day}: {date}</span>
+                <span className={styles.calendar_meal_name}>{m.meal_name || 'Scheduled Meal'}</span>
               </button>
             );
           })}

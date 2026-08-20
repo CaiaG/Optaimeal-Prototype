@@ -384,9 +384,7 @@
   min-height: 500px;
   border: 1px solid #ddd;
   background: #f9f9f9;
-  border-radius: 8px;
-    border-radius: 12px;
-
+  border-radius: 12px;
 }
 
 .comparison_section {
@@ -561,6 +559,7 @@
   flex-grow: 1;
   padding: 20px;
   overflow-y: auto;
+  max-height: 600px;
 }
 
 .reset_chat_btn {

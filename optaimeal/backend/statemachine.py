@@ -189,7 +189,11 @@ def can_client_edit_assignment(assignment: "models.MealAssignment", now: Optiona
         if isinstance(assignment.assignment_date, str)
         else assignment.assignment_date
     )
-    today = (now or datetime.utcnow()).date()
+    # Must use the same REFERENCE_TZ "today" as the rest of this module -
+    # datetime.utcnow() here would let the client-editable window drift out
+    # of sync with week_lock_boundary()/resolve_assignment_status() by
+    # REFERENCE_TZ's UTC offset (see TODO #3, "validate timezone consistency").
+    today = _local_now(now).date()
     return asgn_date == today
 
 

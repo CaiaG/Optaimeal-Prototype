@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styles from './PageOpp.module.css';
 import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, 
-  type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary} from './types/frontendSchemas';
+  type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary, type MealBreakdownResponse, type MealBreakdownTotals, type MealIngredientBreakdown} from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 
 // --- Types & Interfaces ---
@@ -74,7 +74,7 @@ export default function PageOpp() {
   ]);
 
   const [savedMealId, setSavedMealId] = useState<number | null>(null);
-
+  const lastSavedPayloadRef = useRef<string | null>(null);
   useEffect(() => {
     const loadInitialData = async () => {
       // 1. Fetch Meals
@@ -114,12 +114,55 @@ export default function PageOpp() {
     loadInitialData();
   }, []);
 
+ const buildSavePayload = (meal: MealPlan) => {
+    const sanitizedIngredients = (meal.ingredients || []).map((ing: any) => {
+      if (typeof ing === 'string') {
+        return {
+          ingredient_id: null,
+          ingredient_name: ing.trim(),
+          ingredient_quantity: 1.0,
+          unit: 'unit',
+        };
+      }
+      const parsedQuantity = Number(ing.ingredient_quantity);
+      return {
+        ingredient_id: ing.ingredient_id ?? null,
+        ingredient_name: ing.ingredient_name || ing.name || 'Unnamed Ingredient',
+        ingredient_quantity: Number.isFinite(parsedQuantity) ? parsedQuantity : 1.0,
+        unit: ing.unit || 'unit',
+      };
+    });
+ 
+    return {
+      meal_name: meal.meal_name || 'Untitled Meal',
+      status: meal.status || 'Draft',
+      calories_per_serving: Number(meal.calories_per_serving) || 0.0,
+      nutritional_score: Number(meal.nutritional_score) || 0.0,
+      price_per_serving: Number(meal.price_per_serving) || 0.0,
+      ingredients: sanitizedIngredients,
+    };
+  };
+
+  const payloadKey = (mealId: number | null, payload: ReturnType<typeof buildSavePayload>) => {
+    
+    const { status: _status, ...content } = payload;
+    return JSON.stringify({ meal_id: mealId, content });
+  };
+
   // --- Handlers ---
   const handleNavigation = (view: string, meal: MealPlan | null = null) => {
     if (view === 'generate' && !meal) {
       setSelectedMeal(createEmptyMeal());
+      // Brand-new, unsaved meal - nothing to compare against yet.
+      lastSavedPayloadRef.current = null;
     } else {
       setSelectedMeal(meal);
+      // Loading an existing meal fresh from the server/list isn't a local
+      // edit - seed the snapshot so handleSaveDraft doesn't treat merely
+      // opening it for viewing as "dirty".
+      lastSavedPayloadRef.current = meal
+        ? payloadKey(meal.meal_id, buildSavePayload(meal))
+        : null;
     }
     setActiveView(view);
   };
@@ -207,66 +250,53 @@ export default function PageOpp() {
     showAlert = true
   ): Promise<MealPlan | null> => {
     if (!selectedMeal) return null;
-
+ 
     const isExistingMeal = Boolean(selectedMeal.meal_id);
     const endpoint = isExistingMeal
       ? `/api/meal/${selectedMeal.meal_id}`
       : '/api/meal';
-
+ 
     const method = isExistingMeal ? 'PUT' : 'POST';
-
-    const sanitizedIngredients = (selectedMeal.ingredients || []).map(
-      (ing: any) => {
-        if (typeof ing === 'string') {
-          return {
-            ingredient_id: null,
-            ingredient_name: ing.trim(),
-            ingredient_quantity: 1.0,
-            unit: 'unit',
-          };
-        }
-        return {
-          ingredient_id: ing.ingredient_id ?? null,
-          ingredient_name:
-            ing.ingredient_name || ing.name || 'Unnamed Ingredient',
-          ingredient_quantity: Number(ing.ingredient_quantity) || 1.0,
-          unit: ing.unit || 'unit',
-        };
+ 
+    const payload = buildSavePayload(selectedMeal);
+ 
+    // No-op guard: if this meal was already saved and nothing in the
+    // payload has changed since, skip the network call entirely. Without
+    // this, re-saving an unchanged Active meal with a Locked assignment
+    // still forks it (see can_edit_meal_in_place) - there's no reason to
+    // mint a new Meal row when the content is identical to what's already
+    // persisted.
+    const currentKey = payloadKey(selectedMeal.meal_id, payload);
+    if (isExistingMeal && lastSavedPayloadRef.current === currentKey) {
+      if (showAlert) {
+        alert('No changes to save.');
       }
-    );
-
-    // Full payload mapped to backend MealCreate schema
-    const payload = {
-      meal_name: selectedMeal.meal_name || 'Untitled Meal',
-      status: selectedMeal.status || 'Draft',
-      calories_per_serving: Number(selectedMeal.calories_per_serving) || 0.0,
-      nutritional_score: Number(selectedMeal.nutritional_score) || 0.0,
-      price_per_serving: Number(selectedMeal.price_per_serving) || 0.0,
-      ingredients: sanitizedIngredients,
-    };
-
+      return selectedMeal;
+    }
+ 
     try {
       const savedMeal = await apiFetch<MealPlan>(endpoint, {
         method,
         body: JSON.stringify(payload),
       });
-
+ 
       const assignedId = savedMeal.meal_id || selectedMeal.meal_id;
-
+ 
       const updatedMealState: MealPlan = {
         ...selectedMeal,
         ...savedMeal,
         meal_id: assignedId,
-        ingredients: savedMeal.ingredients || sanitizedIngredients,
+        ingredients: savedMeal.ingredients || payload.ingredients,
       };
-
+ 
       setSavedMealId(assignedId);
       setSelectedMeal(updatedMealState);
-
+      lastSavedPayloadRef.current = payloadKey(assignedId, payload);
+ 
       if (showAlert) {
         alert('Draft saved successfully!');
       }
-
+ 
       return updatedMealState;
     } catch (e: any) {
       console.error('Save failed:', e);
@@ -279,20 +309,28 @@ export default function PageOpp() {
   const handleAssignToClient = async (clientId: number | null, date: string) => {
     if (!clientId) return;
 
+    // change so meals can only be assigned to future WEEKS not days (do on front and back)
     const todayStr = new Date().toLocaleDateString('en-CA');
     if (date <= todayStr) {
       alert('Meals can only be assigned to future dates.');
       return;
     }
 
-    // 1. Save or update draft first (handleSaveDraft returns MealPlan | null)
-    const savedMeal = await handleSaveDraft(false);
+    // 1. Only save/PUT when there's actually something new to persist:
+    // either this meal has never been saved (no meal_id yet), or it's
+    // still a Draft (so any edits made since the last save need to land).
+    // Once a meal is 'Active' (already assigned somewhere), re-saving here
+    // would hit update_meal's fork-on-edit path and mint a brand new Meal
+    // row even though nothing changed - that's what was duplicating the
+    // meal on every additional day assigned. Reuse the existing meal_id
+    // directly instead.
+    const needsSave = !selectedMeal?.meal_id || selectedMeal.status !== 'Active';
+    const savedMeal = needsSave ? await handleSaveDraft(false) : selectedMeal;
     if (!savedMeal || !savedMeal.meal_id) return;
 
     const currentMealId = savedMeal.meal_id;
 
     try {
-      // 2. Send assignment request with price and status metadata
       const response = await apiFetch<{
         message: string;
         overwritten: boolean;
@@ -306,25 +344,18 @@ export default function PageOpp() {
           client_id: clientId,
           assignment_date: date,
           price_per_serving: Number(savedMeal.price_per_serving) || 0.0,
-          status: 'Active',
+          status: 'Scheduled',
         }),
       });
 
       alert(response.message || 'Meal assigned successfully!');
 
-      // 3. Update active meal state
       setSelectedMeal((prev) =>
         prev
-          ? {
-              ...prev,
-              ...savedMeal,
-              status: 'Active',
-              assignment_date: date,
-            }
+          ? { ...prev, ...savedMeal, status: 'Active', assignment_date: date }
           : null
       );
 
-      // 4. Synchronize global meals list (safely handles newly created or existing items)
       setMeals((prevMeals) => {
         const existingIndex = prevMeals.findIndex((m) => m.meal_id === currentMealId);
         const updatedMeal: MealPlan = {
@@ -351,6 +382,7 @@ export default function PageOpp() {
   const handleCreateNewIngredient = async (
       input: string | CreateIngredientPayload
     ): Promise<MasterIngredient | null> => {
+      // rn only passes name when create ingr
       const payload: CreateIngredientPayload =
         typeof input === 'string'
           ? { ingredient_name: input.trim() }
@@ -884,15 +916,6 @@ function GenerateView({
     await onAssignToClient(clientId, assignmentDate);
     setIsModalOpen(false);
   };
-
-  // const rawIngredients = meal?.ingredients as unknown;
-
-  // const ingredientList: string[] = Array.isArray(rawIngredients)
-  //   ? rawIngredients
-  //   : typeof rawIngredients === 'string'
-  //   ? rawIngredients.split(',').map((item: string) => item.trim()).filter(Boolean)
-  //   : [];
-
   
 
   const [assignmentDate, setAssignmentDate] = useState<string>(
@@ -952,6 +975,7 @@ function GenerateView({
             <h3>Ingredients List</h3>
 
             {/* Structured Line Items List */}
+            {/*restrict ingredient quantity to 2 decimal places pls */}
             <ul className={styles.ingredients_list}>
               {meal?.ingredients?.map((ing: MealIngredient, i: number) => (
                 <li key={`${ing.ingredient_id}-${i}`} className={styles.ingredient_item}>
@@ -1301,6 +1325,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
             value={selectedClientId || ''} 
             onChange={(e) => setSelectedClientId(Number(e.target.value))}
           >
+            <option> </option>
             {clients.map((c: any) => (
               <option key={c.client_id} value={c.client_id}>
                 {c.client_name || c.name}
@@ -1445,6 +1470,7 @@ function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
 }
 
 // --- COMPONENT ---
+
 function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'pricing'>('overview');
   const [selectedClientId, setSelectedClientId] = useState<string>('');
@@ -1452,6 +1478,12 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Pricing / Ingredient Breakdown tab state
+  const [breakdownMealId, setBreakdownMealId] = useState<number | null>(null);
+  const [breakdown, setBreakdown] = useState<MealBreakdownResponse | null>(null);
+  const [breakdownLoading, setBreakdownLoading] = useState<boolean>(false);
+  const [breakdownError, setBreakdownError] = useState<string | null>(null);
 
   const totalMeals = meals?.length || 0;
   const activeMealsCount = meals?.filter(m => m.status?.toLowerCase() === 'active').length || 0;
@@ -1475,6 +1507,45 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
 
     fetchAnalytics();
   }, [activeTab, selectedClientId]);
+
+  // Default the meal selector to the first available meal once the
+  // Pricing & Ingredient Trends tab is opened.
+  useEffect(() => {
+    if (activeTab === 'pricing' && breakdownMealId === null && meals.length > 0) {
+      setBreakdownMealId(meals[0].meal_id);
+    }
+  }, [activeTab, meals, breakdownMealId]);
+
+  useEffect(() => {
+    if (activeTab !== 'pricing' || breakdownMealId === null) return;
+
+    const fetchBreakdown = async () => {
+      try {
+        setBreakdownLoading(true);
+        setBreakdownError(null);
+        const data = await apiFetch<MealBreakdownResponse>(`/api/meal/${breakdownMealId}/breakdown`);
+        setBreakdown(data);
+      } catch (err: any) {
+        setBreakdownError(err.message || 'Failed to fetch meal breakdown');
+        setBreakdown(null);
+      } finally {
+        setBreakdownLoading(false);
+      }
+    };
+
+    fetchBreakdown();
+  }, [activeTab, breakdownMealId]);
+
+  const MICRO_LABELS: Array<{ key: keyof MealBreakdownTotals; label: string; unit: string }> = [
+    { key: 'vitamin_a_mcg', label: 'Vitamin A', unit: 'mcg' },
+    { key: 'vitamin_c_mg', label: 'Vitamin C', unit: 'mg' },
+    { key: 'vitamin_b6_mg', label: 'Vitamin B6', unit: 'mg' },
+    { key: 'vitamin_b12_mcg', label: 'Vitamin B12', unit: 'mcg' },
+    { key: 'iron_mg', label: 'Iron', unit: 'mg' },
+    { key: 'zinc_mg', label: 'Zinc', unit: 'mg' },
+    { key: 'thiamin_mg', label: 'Thiamin', unit: 'mg' },
+    { key: 'riboflavin_mg', label: 'Riboflavin', unit: 'mg' },
+  ];
 
   const formatDate = (isoString: string) => {
     try {
@@ -1548,7 +1619,7 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
           <div className={styles.analytics_sections_grid}>
             {/* Activity Log Panel */}
             <div className={`${styles.analytics_panel} ${styles.analytics_panel_large}`}>
-              <h4>Recent Menu Activity (Next-Day Surfaced)</h4>
+              <h4>Recent Menu Activity </h4>
               
               {loading ? (
                 <div className={styles.analytics_loading}>Loading analytics data...</div>
@@ -1653,14 +1724,136 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
         </div>
       )}
 
-      {/* TAB 3: PRICING & INGREDIENT TRENDS */}
+      {/* TAB 3: PRICING & INGREDIENT TRENDS / MEAL INFO */}
       {activeTab === 'pricing' && (
         <div className={styles.tab_content}>
-          <h4>Meal & Ingredient Cost Evolution</h4>
-          <p className={styles.analytics_subtext}>Tracking historical modifications and price adjustments over time.</p>
-          {/* Pricing trend tables can go here */}
+          <div className={styles.filter_toolbar}>
+            <label>Select Meal: </label>
+            <select
+              value={breakdownMealId ?? ''}
+              onChange={(e) => setBreakdownMealId(e.target.value ? Number(e.target.value) : null)}
+              className={styles.analytics_select}
+            >
+              {meals.length === 0 && <option value="">No meals available</option>}
+              {meals.map((m) => (
+                <option key={m.meal_id} value={m.meal_id ?? ''}>{m.meal_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {breakdownLoading ? (
+            <div className={styles.analytics_loading}>Loading meal breakdown...</div>
+          ) : breakdownError ? (
+            <div className={styles.analytics_error}>{breakdownError}</div>
+          ) : breakdown ? (
+            <>
+              {/* Summary Cards */}
+              <div className={styles.analytics_metrics_grid}>
+                <div className={styles.analytics_metric_card}>
+                  <span>Estimated Cost / Serving</span>
+                  <strong className={styles.analytics_val_primary}>
+                    ${breakdown.totals.total_cost.toFixed(2)}
+                  </strong>
+                </div>
+                <div className={styles.analytics_metric_card}>
+                  <span>Total Calories</span>
+                  <strong className={styles.analytics_val_success}>
+                    {breakdown.totals.energy_kcal.toFixed(0)} kcal
+                  </strong>
+                </div>
+                <div className={styles.analytics_metric_card}>
+                  <span>Total Protein</span>
+                  <strong className={styles.analytics_val_info}>
+                    {breakdown.totals.protein_g.toFixed(1)} g
+                  </strong>
+                </div>
+                <div className={styles.analytics_metric_card}>
+                  <span>Total Carbs</span>
+                  <strong className={styles.analytics_val_warning}>
+                    {breakdown.totals.carb_g.toFixed(1)} g
+                  </strong>
+                </div>
+                <div className={styles.analytics_metric_card}>
+                  <span>Total Fat</span>
+                  <strong>{breakdown.totals.fat_g.toFixed(1)} g</strong>
+                </div>
+              </div>
+
+              <div className={styles.analytics_sections_grid}>
+                {/* Itemized Ingredient Table */}
+                <div className={`${styles.analytics_panel} ${styles.analytics_panel_large}`}>
+                  <h4>Itemized Ingredients</h4>
+                  {breakdown.ingredients.length > 0 ? (
+                    <div className={styles.analytics_log_table_wrapper}>
+                      <table className={styles.analytics_log_table}>
+                        <thead>
+                          <tr>
+                            <th>Ingredient</th>
+                            <th>Category</th>
+                            <th>Quantity</th>
+                            <th>Cost</th>
+                            <th>Protein (g)</th>
+                            <th>Carbs (g)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {breakdown.ingredients.map((item) => (
+                            <tr key={item.ingredient_id}>
+                              <td>{item.ingredient_name}</td>
+                              <td>{item.category || 'n/a'}</td>
+                              <td>{item.quantity} {item.unit}</td>
+                              <td>${item.cost_contribution.toFixed(2)}</td>
+                              <td>{item.has_nutrition_data ? (item.macros.protein_g ?? 0).toFixed(1) : '—'}</td>
+                              <td>{item.has_nutrition_data ? (item.macros.carb_g ?? 0).toFixed(1) : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className={styles.analytics_empty}>No ingredients on this meal.</div>
+                  )}
+                </div>
+
+                {/* Nutritional Micro Breakdown */}
+                <div className={styles.analytics_panel}>
+                  <h4>Nutritional Micro Breakdown</h4>
+                  <div className={styles.analytics_list}>
+                    {MICRO_LABELS.map(({ key, label, unit }) => (
+                      <div className={styles.analytics_row} key={key}>
+                        <span className={styles.analytics_action_name}>{label}</span>
+                        <strong>{breakdown.totals[key].toFixed(2)} {unit}</strong>
+                      </div>
+                    ))}
+                  </div>
+
+                  {breakdown.ingredients.some((i) => i.has_nutrition_data) && (
+                    <details style={{ marginTop: '1rem' }}>
+                      <summary>Per-ingredient micro detail</summary>
+                      {breakdown.ingredients
+                        .filter((i) => i.has_nutrition_data)
+                        .map((item) => (
+                          <div key={item.ingredient_id} style={{ marginTop: '0.5rem' }}>
+                            <strong>{item.ingredient_name}</strong>
+                            <div className={styles.analytics_muted}>
+                              Fe {(item.micros.iron_mg ?? 0).toFixed(2)}mg · Zn {(item.micros.zinc_mg ?? 0).toFixed(2)}mg
+                              {' '}· Vit A {(item.micros.vitamin_a_mcg ?? 0).toFixed(1)}mcg · Vit C {(item.micros.vitamin_c_mg ?? 0).toFixed(1)}mg
+                              {' '}· Vit B12 {(item.micros.vitamin_b12_mcg ?? 0).toFixed(2)}mcg
+                            </div>
+                          </div>
+                        ))}
+                    </details>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className={styles.analytics_empty}>Select a meal to view its cost & nutrition breakdown.</div>
+          )}
         </div>
       )}
     </div>
   );
 }
+
+ 

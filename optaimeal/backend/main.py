@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Response
+from fastapi import FastAPI, Depends, HTTPException, status, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, Field
 from datetime import date, datetime, timedelta
 import json
 import os
@@ -60,6 +60,30 @@ class IngredientOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class NutritionProfileLLM(BaseModel):
+    energy_kcal: float = 0.0
+    protein_g: float = 0.0
+    fat_g: float = 0.0
+    carb_g: float = 0.0
+    fibre_g: float = 0.0
+    vitamin_a_mcg: float = 0.0
+    vitamin_c_mg: float = 0.0
+    vitamin_b6_mg: float = 0.0
+    vitamin_b12_mcg: float = 0.0
+    iron_mg: float = 0.0
+    zinc_mg: float = 0.0
+    thiamin_mg: float = 0.0
+    riboflavin_mg: float = 0.0
+
+class IngredientEnrichmentPayload(BaseModel):
+    category: str = Field(description="Produce, Meat, Dairy, Grain, Pantry, etc.")
+    price_per_unit: float = Field(description="Estimated USD price per standard unit")
+    unit: str = Field(description="e.g. kg, lb, oz, item, liter")
+    location: Optional[str] = "Global"
+    season: Optional[str] = "Year-round"
+    availability: Optional[str] = "High"
+    substitutes: List[str] = []
+    nutrition: NutritionProfileLLM = Field(description="Nutritional estimates per 100g")
 
 # ==========================================
 # Meal Ingredient Join Schemas
@@ -121,6 +145,61 @@ class MealAdjustmentRequest(BaseModel):
     meal_id: int
     adjustments: Dict[str, Any]
 
+# ==========================================
+# Meal & Ingredient Breakdown Schemas
+# ==========================================
+
+MACRO_FIELDS = ["energy_kcal", "protein_g", "fat_g", "carb_g", "fibre_g"]
+MICRO_FIELDS = [
+    "vitamin_a_mcg",
+    "vitamin_c_mg",
+    "vitamin_b6_mg",
+    "vitamin_b12_mcg",
+    "iron_mg",
+    "zinc_mg",
+    "thiamin_mg",
+    "riboflavin_mg",
+]
+
+
+class MealIngredientBreakdown(BaseModel):
+    ingredient_id: int
+    ingredient_name: str
+    category: Optional[str] = None
+    quantity: float
+    unit: str = "unit"
+    price_per_unit: Optional[float] = 0.0
+    cost_contribution: float = 0.0
+    macros: Dict[str, float] = {}
+    micros: Dict[str, float] = {}
+    has_nutrition_data: bool = False
+
+
+class MealBreakdownTotals(BaseModel):
+    total_cost: float = 0.0
+    energy_kcal: float = 0.0
+    protein_g: float = 0.0
+    fat_g: float = 0.0
+    carb_g: float = 0.0
+    fibre_g: float = 0.0
+    vitamin_a_mcg: float = 0.0
+    vitamin_c_mg: float = 0.0
+    vitamin_b6_mg: float = 0.0
+    vitamin_b12_mcg: float = 0.0
+    iron_mg: float = 0.0
+    zinc_mg: float = 0.0
+    thiamin_mg: float = 0.0
+    riboflavin_mg: float = 0.0
+
+
+class MealBreakdownResponse(BaseModel):
+    meal_id: int
+    meal_name: str
+    status: str
+    price_per_serving: float = 0.0
+    calories_per_serving: float = 0.0
+    ingredients: List[MealIngredientBreakdown] = []
+    totals: MealBreakdownTotals
 
 # ==========================================
 # Client Schemas
@@ -177,12 +256,12 @@ class ChatMessageSchema(BaseModel):
 
 class ChatRequest(BaseModel):
     client_id: int
-    assignment_date: str
+    assignment_date: date
     message: str
 
 class RegenerateRequest(BaseModel):
     client_id: int
-    assignment_date: str
+    assignment_date: date
     meal_id: int
     current_meal_name: str
     servings: int = 1
@@ -198,7 +277,7 @@ class RegenerateResponse(BaseModel):
 
 class ApplySelectionRequest(BaseModel):
     client_id: int
-    assignment_date: str
+    assignment_date: date
     selected_meal: dict
 
 class ChatMessagePayload(BaseModel):
@@ -251,7 +330,7 @@ class MenuAnalyticsResponse(BaseModel):
 
 
 # ==========================================
-# Helper Formatter Function
+# Helper Functionss
 # ==========================================
 
 def format_meal(meal: Any) -> dict:
@@ -280,6 +359,102 @@ def format_meal(meal: Any) -> dict:
         "created_at": getattr(meal, "created_at", None),
         "updated_at": getattr(meal, "updated_at", None),
     }
+
+def enrich_ingredient_in_background(ingredient_id: int, db_session_factory):
+    """Fills in missing base fields AND attaches nutrition profile in a single task."""
+    db = db_session_factory()
+    try:
+        ingredient = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ingredient_id).first()
+        if not ingredient:
+            return
+
+        system_prompt = """
+You are an expert culinary and nutritional database enrichment assistant.
+Given an ingredient name, estimate its default category, price per unit in USD, standard unit of measurement, general sourcing location, seasonality, availability, potential culinary substitutes, and estimated nutritional values per 100g or 100ml if the ingredient is a liquid.
+Rules for "nutrition":
+- "serving_size": Numeric value from which nutritional values are based off (default is usually 100).
+- "serving_unit": Standard unit, MUST be strictly either "g" or "ml".
+
+You MUST respond with a valid JSON object strictly matching the following schema:
+{
+    "category": "Produce",
+    "price_per_unit": 1.50,
+    "unit": "lb",
+    "location": "Global",
+    "season": "Year-round",
+    "availability": "High",
+    "substitutes": ["substitute 1", "substitute 2"],
+    "nutrition": {
+        "serving_size": 100, 
+        "serving_unit": "g",  
+        "energy_kcal": 52.0,
+        "protein_g": 0.3,
+        "fat_g": 0.2,
+        "carb_g": 13.8,
+        "fibre_g": 2.4,
+        "vitamin_a_mcg": 3.0,
+        "vitamin_c_mg": 4.6,
+        "vitamin_b6_mg": 0.04,
+        "vitamin_b12_mcg": 0.0,
+        "iron_mg": 0.12,
+        "zinc_mg": 0.04,
+        "thiamin_mg": 0.02,
+        "riboflavin_mg": 0.03
+    }
+}
+"""
+
+        user_prompt = f"Please enrich the nutritional and market data for ingredient: '{ingredient.ingredient_name}'"
+
+        # Query Groq LLM using JSON mode
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+
+        response_text = completion.choices[0].message.content
+        parsed_json = json.loads(response_text)
+
+        # Validate with the predefined Pydantic schema
+        enriched_data = IngredientEnrichmentPayload(**parsed_json)
+
+        # Update base ingredient fields
+        ingredient.category = enriched_data.category
+        ingredient.price_per_unit = enriched_data.price_per_unit
+        ingredient.unit = enriched_data.unit
+        ingredient.location = enriched_data.location
+        ingredient.season = enriched_data.season
+        ingredient.availability = enriched_data.availability
+        ingredient.substitutes = enriched_data.substitutes
+
+        # Add or update the nutritional record (100g standard)
+        nutrition_dict = (
+            enriched_data.nutrition.model_dump()
+            if hasattr(enriched_data.nutrition, "model_dump")
+            else enriched_data.nutrition.dict()
+        )
+
+        if not ingredient.nutrition:
+            nutrition_row = models.IngredientNutrition(
+                ingredient_id=ingredient.ingredient_id,
+                **nutrition_dict
+            )
+            db.add(nutrition_row)
+        else:
+            for key, val in nutrition_dict.items():
+                setattr(ingredient.nutrition, key, val)
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error enriching ingredient {ingredient_id}: {e}")
+    finally:
+        db.close()
 
 # ==========================================
 # Logging Schemas
@@ -344,6 +519,104 @@ def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
 
     return format_meal(meal)
 
+# Get cost + nutrition breakdown for a meal (per-ingredient and totals)
+@app.get("/api/meal/{meal_id}/breakdown", response_model=MealBreakdownResponse)
+def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
+    meal = (
+        db.query(models.Meal)
+        .options(
+            joinedload(models.Meal.meal_ingredients)
+            .joinedload(models.MealIngredients.ingredient)
+            .joinedload(models.Ingredient.nutrition)
+        )
+        .filter(models.Meal.meal_id == meal_id)
+        .first()
+    )
+
+    if not meal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Meal with ID {meal_id} not found",
+        )
+
+    running_totals = {field: 0.0 for field in MACRO_FIELDS + MICRO_FIELDS}
+    total_cost = 0.0
+    ingredient_breakdowns: List[MealIngredientBreakdown] = []
+
+    for mi in meal.meal_ingredients:
+        ing = mi.ingredient
+        quantity = mi.ingredient_quantity or 0.0
+        unit = mi.unit or "unit"
+
+        if not ing:
+            ingredient_breakdowns.append(
+                MealIngredientBreakdown(
+                    ingredient_id=mi.ingredient_id,
+                    ingredient_name="Unnamed Ingredient",
+                    quantity=quantity,
+                    unit=unit,
+                )
+            )
+            continue
+
+        price_per_unit = ing.price_per_unit or 0.0
+        # Simplifying assumption: ingredient_quantity is entered in the same
+        # unit the ingredient is priced in, so cost scales linearly with it.
+        cost_contribution = round(price_per_unit * quantity, 4)
+        total_cost += cost_contribution
+
+        macros: Dict[str, float] = {}
+        micros: Dict[str, float] = {}
+        has_nutrition = ing.nutrition is not None
+
+        if has_nutrition:
+            serving_size = ing.nutrition.serving_size or 100.0
+            # Nutrition values are stored per `serving_size` (default 100g/ml).
+            # Simplifying assumption: ingredient_quantity/unit on the meal is
+            # expressed in the same base unit as serving_unit, so we scale
+            # linearly by ratio rather than attempting unit conversion.
+            scale = (quantity / serving_size) if serving_size else 0.0
+
+            for field in MACRO_FIELDS:
+                val = round(getattr(ing.nutrition, field, 0.0) * scale, 3)
+                macros[field] = val
+                running_totals[field] += val
+
+            for field in MICRO_FIELDS:
+                val = round(getattr(ing.nutrition, field, 0.0) * scale, 3)
+                micros[field] = val
+                running_totals[field] += val
+
+        ingredient_breakdowns.append(
+            MealIngredientBreakdown(
+                ingredient_id=ing.ingredient_id,
+                ingredient_name=ing.ingredient_name,
+                category=ing.category,
+                quantity=quantity,
+                unit=unit,
+                price_per_unit=price_per_unit,
+                cost_contribution=cost_contribution,
+                macros=macros,
+                micros=micros,
+                has_nutrition_data=has_nutrition,
+            )
+        )
+
+    totals_out = MealBreakdownTotals(
+        total_cost=round(total_cost, 4),
+        **{field: round(val, 3) for field, val in running_totals.items()},
+    )
+
+    return MealBreakdownResponse(
+        meal_id=meal.meal_id,
+        meal_name=meal.meal_name,
+        status=meal.status,
+        price_per_serving=float(meal.price_per_serving or 0.0),
+        calories_per_serving=meal.calories_per_serving or 0.0,
+        ingredients=ingredient_breakdowns,
+        totals=totals_out,
+    )
+
 
 # Update meal details given meal id
 @app.put("/api/meal/{meal_id}", response_model=MealOut)
@@ -360,14 +633,14 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
             detail=f"Meal with ID {meal_id} not found"
         )
     
-    if existing_meal.status == "Archived":
+    if existing_meal.status == MealStatus.ARCHIVED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Archived meals are locked and cannot be edited."
         )
 
     # STATE MACHINE
-    if not statemachine.can_edit_meal_in_place(existing_meal):
+    if not statemachine.can_edit_meal_in_place(existing_meal, db):
         # Active meal: shared by >=1 live assignment, so we never mutate it
         # directly. Fork a new Draft meal carrying the requested edits; the
         # caller repoints whichever assignment(s) should use it (e.g. via
@@ -442,7 +715,9 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
                 models.MealIngredients(
                     meal_id=meal_id,
                     ingredient_id=ing_id,
-                    ingredient_quantity=item.ingredient_quantity if item.ingredient_quantity is not None else 1.0,
+                    ingredient_quantity=round(
+                        float(item.ingredient_quantity if item.ingredient_quantity is not None else 1.0), 2
+                    ),
                     unit=item.unit or "unit",
                 )
             )
@@ -487,7 +762,7 @@ def assign_menu_to_client(
             detail=f"Meal with ID {request.meal_id} not found",
         )
 
-    if meal.status == "Archived":
+    if not statemachine.can_assign_meal(meal):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Archived menus cannot be assigned",
@@ -611,6 +886,20 @@ def assign_menu_to_client(
                 statemachine.sync_meal_status(previous_meal, db)
 
     else:
+        # BUGFIX (TODO #16): previously there was no check here at all, so
+        # an operator could create a brand-new assignment directly into an
+        # already-Locked or Archived week/day, completely bypassing the
+        # 24h edit-lock rule that the overwrite branch above enforces.
+        if assigned_status != AssignmentStatus.SCHEDULED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot create a new assignment for {request.assignment_date.isoformat()}; "
+                    f"that date's week is already '{assigned_status}' and outside the "
+                    "operator edit window."
+                ),
+            )
+
         # Create new assignment
         new_assignment = models.MealAssignment(
             client_id=request.client_id,
@@ -693,7 +982,12 @@ def get_all_ingredients(db: Session = Depends(database.get_db)):
 
 
 @app.post("/api/ingredients", response_model=IngredientOut, status_code=status.HTTP_201_CREATED)
-def create_ingredient(payload: IngredientCreate, response: Response, db: Session = Depends(database.get_db)):
+def create_ingredient(
+    payload: IngredientCreate, 
+    background_tasks: BackgroundTasks, 
+    response: Response, 
+    db: Session = Depends(database.get_db)
+):
     clean_name = payload.ingredient_name.strip()
 
     # Check for existing duplicate
@@ -704,7 +998,6 @@ def create_ingredient(payload: IngredientCreate, response: Response, db: Session
     if existing:
         response.status_code = status.HTTP_200_OK 
         return existing
-        
         
     new_ingredient = models.Ingredient(
         ingredient_name=clean_name,
@@ -720,6 +1013,14 @@ def create_ingredient(payload: IngredientCreate, response: Response, db: Session
     db.add(new_ingredient)
     db.commit()
     db.refresh(new_ingredient)
+
+    # add nutritional val and missing fields
+    background_tasks.add_task(
+        enrich_ingredient_in_background, 
+        new_ingredient.ingredient_id, 
+        database.SessionLocal
+    )
+    
     return new_ingredient
 
 @app.get("/api/meals", response_model=List[MealOut])
@@ -775,7 +1076,9 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
                 models.MealIngredients(
                     meal_id=new_meal.meal_id,
                     ingredient_id=ing_id,
-                    ingredient_quantity=item.ingredient_quantity if item.ingredient_quantity is not None else 1.0,
+                    ingredient_quantity=round(
+                        float(item.ingredient_quantity if item.ingredient_quantity is not None else 1.0), 2
+                    ),
                     unit=item.unit or "unit",
                 )
             )
@@ -872,9 +1175,18 @@ def get_client_weekly_assignments(client_id: int, db: Session = Depends(database
             detail=f"Client with ID {client_id} not found"
         )
 
-    today = date.today()
+    # BUGFIX (TODO #9): use the same local "today" the rest of the state
+    # machine uses (REFERENCE_TZ), not the server's naive date.today() -
+    # near midnight these can disagree by hours depending on where the
+    # server actually runs vs. where clients are (e.g. Africa/Nairobi).
+    today = statemachine._local_now().date()
     start_of_week = today - timedelta(days=today.weekday())  # Monday
     end_of_week = start_of_week + timedelta(days=6)          # Sunday
+
+    # TODO #11: from Friday onward, also surface next week so clients can
+    # plan ahead instead of only seeing the current Mon-Sun window.
+    if today.weekday() >= 4:  # Fri=4, Sat=5, Sun=6
+        end_of_week += timedelta(days=7)
 
     assignments = (
         db.query(models.MealAssignment)
@@ -1006,7 +1318,7 @@ def regenerate_meal_options(
            - Propose exactly **2 distinct alternative meal options** that completely avoid all unavailable ingredients.
         3. **Conversational Summary (`reply`)**:
            - Provide a concise culinary explanation summarizing adaptations made and highlighting the 2 alternative options.
-        4. **Per-Serving Quantities:** All ingredient quantities (`ingredient_quantity`) MUST be calculated and returned for exactly **ONE serving** (base recipe unit), NOT the total batch size.
+        4. **Per-Serving Quantities:** All ingredient quantities (`ingredient_quantity`) MUST be calculated and returned for exactly **ONE serving** (base recipe unit), NOT the total batch size. Quantities must also not go beyond two decimal places.
         
         Follow these strict versioning rules when generating or modifying meals:
         1. **Original Version:** Brand new meal generations are considered the base version and should NOT have a version suffix in their name (e.g., "Garlic Herb Chicken").
@@ -1200,7 +1512,7 @@ def apply_meal_selection(
                 models.MealIngredients(
                     meal_id=chosen_meal.meal_id,
                     ingredient_id=db_ing.ingredient_id,
-                    ingredient_quantity=ingredient_quantity,
+                    ingredient_quantity=round(ingredient_quantity, 2),
                     unit=ing_unit,
                 )
             )
