@@ -324,7 +324,14 @@ export default function PageClient() {
             // Helper to format date string (e.g., "Monday", "10/24")
             const formatDayLabel = (dateString: string) => {
               try {
-                const date = new Date(dateString);
+                // Check if the string already has time, if not, append Noon (T12:00:00) 
+                // to prevent timezone offsets from pushing it to the previous day.
+                const safeDateString = dateString.includes('T') 
+                  ? dateString 
+                  : `${dateString}T12:00:00`;
+                  
+                const date = new Date(safeDateString);
+                
                 if (isNaN(date.getTime())) return { day: 'Day', date: dateString };
                 
                 const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
@@ -334,7 +341,6 @@ export default function PageClient() {
                 return { day: 'Day', date: dateString };
               }
             };
-
             const { day, date } = formatDayLabel(m.assignment_date);
 
             return (

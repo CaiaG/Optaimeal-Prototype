@@ -172,14 +172,11 @@ def sync_meal_status(meal: "models.Meal", db: Session) -> bool:
 def can_operator_edit_assignment(assignment: "models.MealAssignment") -> bool:
     return assignment.status == AssignmentStatus.SCHEDULED
 
-
 def can_client_edit_assignment(assignment: "models.MealAssignment", now: Optional[datetime] = None) -> bool:
     """
-    Client edits (regenerate/apply-selection) are only allowed on the actual
-    cook day, not any time during the Locked week. Locked just means
-    "operator can't touch it anymore" - it does NOT mean "client can touch
-    it yet." A Thursday assignment is Locked from Sunday night onward, but
-    should only be client-editable ON Thursday.
+    Client edits are allowed for the CURRENT DAY plus any remaining days 
+    in the current week that have not yet passed.
+    Past days in the week are locked, and next week's meals are not yet editable.
     """
     if assignment.status != AssignmentStatus.LOCKED:
         return False
@@ -189,12 +186,16 @@ def can_client_edit_assignment(assignment: "models.MealAssignment", now: Optiona
         if isinstance(assignment.assignment_date, str)
         else assignment.assignment_date
     )
-    # Must use the same REFERENCE_TZ "today" as the rest of this module -
-    # datetime.utcnow() here would let the client-editable window drift out
-    # of sync with week_lock_boundary()/resolve_assignment_status() by
-    # REFERENCE_TZ's UTC offset (see TODO #3, "validate timezone consistency").
+    
     today = _local_now(now).date()
-    return asgn_date == today
+    
+    # Calculate the end of the current week (Assuming Monday=0, Sunday=6)
+    # This finds how many days are left until Sunday, and adds them to today.
+    days_until_sunday = 6 - today.weekday()
+    end_of_week = today + timedelta(days=days_until_sunday)
+    
+    # Must be today or later, AND must not exceed the current week's Sunday
+    return today <= asgn_date <= end_of_week
 
 
 def can_edit_meal_in_place(meal: "models.Meal") -> bool:

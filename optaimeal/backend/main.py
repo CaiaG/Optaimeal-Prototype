@@ -1412,9 +1412,18 @@ def regenerate_meal_options(
         )
 
 # UNTESTED/UNIMPLEMENTED
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from sqlalchemy.orm import Session, joinedload
+from datetime import datetime
+import json
+
+# (Assumes standard imports for models, database, statemachine, format_meal, etc.)
+
 @app.post("/api/client/menu/apply-selection")
 def apply_meal_selection(
-    request: ApplySelectionRequest, db: Session = Depends(database.get_db)
+    request: ApplySelectionRequest, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(database.get_db)
 ):
     # Fetch assignment record
     assignment = (
@@ -1457,6 +1466,9 @@ def apply_meal_selection(
             .first()
         )
 
+    # Keep track of ingredient IDs that need LLM background enrichment
+    ingredients_to_enrich = []
+
     # Determine if we need to persist a NEW meal or use an existing one
     if existing_meal:
         chosen_meal = existing_meal
@@ -1465,7 +1477,6 @@ def apply_meal_selection(
         chosen_meal = models.Meal(
             meal_name=selected.get("meal_name", "Adapted Meal").strip(),
             parent_meal_id=previous_meal_id if is_edited else None,
-            # status="Active",
             status=MealStatus.DRAFT,
             calories_per_serving=selected.get("calories_per_serving"),
             nutritional_score=str(selected.get("nutritional_score", "0.0")),
@@ -1476,7 +1487,6 @@ def apply_meal_selection(
         # Attach ingredients to join table (models.MealIngredients)
         ingredient_list = selected.get("ingredients", [])
         for ing_item in ingredient_list:
-            # Handle both dictionary objects (with quantity/unit) and raw strings
             if isinstance(ing_item, dict):
                 ing_name = str(ing_item.get("ingredient_name", "")).strip()
                 
@@ -1503,10 +1513,18 @@ def apply_meal_selection(
                 .filter(models.Ingredient.ingredient_name.ilike(ing_name))
                 .first()
             )
+            
+            is_new = False
             if not db_ing:
                 db_ing = models.Ingredient(ingredient_name=ing_name)
                 db.add(db_ing)
                 db.flush()
+                is_new = True
+
+            # Track new or un-enriched ingredients for background LLM processing
+            if is_new or not db_ing.nutrition:
+                if db_ing.ingredient_id not in ingredients_to_enrich:
+                    ingredients_to_enrich.append(db_ing.ingredient_id)
 
             db.add(
                 models.MealIngredients(
@@ -1521,7 +1539,6 @@ def apply_meal_selection(
     assignment.meal_id = chosen_meal.meal_id
     db.flush()
     
-
     log = (
         db.query(models.MealAssignmentLog)
         .filter(models.MealAssignmentLog.assignment_id == assignment.id)
@@ -1574,6 +1591,14 @@ def apply_meal_selection(
             statemachine.sync_meal_status(prev_meal, db)
  
     db.commit()
+
+    # Trigger background enrichment tasks for any new/un-enriched ingredients
+    for ing_id in ingredients_to_enrich:
+        background_tasks.add_task(
+            enrich_ingredient_in_background,
+            ingredient_id=ing_id,
+            db_session_factory=database.SessionLocal,
+        )
 
     # Eager load full meal details for UI return payload
     final_meal = (

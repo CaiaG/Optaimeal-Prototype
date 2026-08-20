@@ -462,7 +462,6 @@ export default function PageOpp() {
     <div className={styles.opp_container}>
       <aside className={styles.sidebar_wrapper}>
         <nav className={styles.top_sidebar}>
-          // this aint right
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('home')}>Main</button>
           <button className={styles.top_sidebar_btn} onClick={() => handleNavigation('generate')}>Generate</button>
           <button className={styles.top_sidebar_btn} onClick={() => setActiveView('calendar')}>Calendar</button>
@@ -1714,13 +1713,111 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
               onChange={(e) => setSelectedClientId(e.target.value)}
               className={styles.analytics_select}
             >
-              <option value="">-- All Clients --</option>
+              <option value="">-- Select a Client --</option>
               {clients.map(c => (
                 <option key={c.client_id} value={c.client_id}>{c.client_name}</option>
               ))}
             </select>
           </div>
-          {/* Client-specific metrics and view can go here */}
+
+          {!selectedClientId ? (
+            <div className={styles.analytics_empty}>Please select a client above to view their assigned meals and profile analytics.</div>
+          ) : loading ? (
+            <div className={styles.analytics_loading}>Loading client profile & meals...</div>
+          ) : error ? (
+            <div className={styles.analytics_error}>{error}</div>
+          ) : (
+            <>
+              {/* Client Profile Summary Cards */}
+              <div className={styles.analytics_metrics_grid}>
+                <div className={styles.analytics_metric_card}>
+                  <span>Client Name</span>
+                  <strong className={styles.analytics_val_primary}>
+                    {clients.find(c => String(c.client_id) === selectedClientId)?.client_name || 'N/A'}
+                  </strong>
+                </div>
+                <div className={styles.analytics_metric_card}>
+                  <span>Assigned Population Size</span>
+                  <strong className={styles.analytics_val_success}>
+                    {clients.find(c => String(c.client_id) === selectedClientId)?.population || 1} people
+                  </strong>
+                </div>
+                <div className={styles.analytics_metric_card}>
+                  <span>Total Recorded Interactions</span>
+                  <strong className={styles.analytics_val_info}>
+                    {analytics?.entries?.length || 0}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Client's Actual Assigned Meals Section */}
+              <div className={styles.analytics_sections_grid}>
+                <div className={`${styles.analytics_panel} ${styles.analytics_panel_large}`}>
+                  <h4>Client Meal Schedule & Catalog</h4>
+                  
+                  {meals && meals.length > 0 ? (
+                    <div className={styles.analytics_log_table_wrapper}>
+                      <table className={styles.analytics_log_table}>
+                        <thead>
+                          <tr>
+                            <th>Meal Name</th>
+                            <th>Status</th>
+                            <th>Est. Calories</th>
+                            <th>Price / Serving</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {meals.map((meal) => (
+                            <tr key={meal.meal_id}>
+                              <td><strong>{meal.meal_name}</strong></td>
+                              <td>
+                                <span className={`${styles.analytics_badge} ${styles.badge_operator}`}>
+                                  {meal.status || 'Draft'}
+                                </span>
+                              </td>
+                              <td>{meal.calories_per_serving ? `${meal.calories_per_serving.toFixed(0)} kcal` : '—'}</td>
+                              <td>${meal.price_per_serving ? meal.price_per_serving.toFixed(2) : '0.00'}</td>
+                              <td>
+                                <button
+                                  className={styles.analytics_tab_btn}
+                                  style={{ padding: '0.25rem 0.75rem', fontSize: '0.85rem' }}
+                                  onClick={() => {
+                                    setActiveTab('pricing');
+                                    setBreakdownMealId(meal.meal_id);
+                                  }}
+                                >
+                                  Inspect Breakdown &rarr;
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className={styles.analytics_empty}>No meals found in the system catalog.</div>
+                  )}
+                </div>
+
+                {/* Client-Specific Change Summary Panel */}
+                <div className={styles.analytics_panel}>
+                  <h4>Client Modification Actions</h4>
+                  <div className={styles.analytics_list}>
+                    {analytics?.summary.by_action && Object.entries(analytics.summary.by_action).map(([action, count]) => (
+                      <div className={styles.analytics_row} key={action}>
+                        <span className={styles.analytics_action_name}>{action.replace(/_/g, ' ')}</span>
+                        <strong>{count}</strong>
+                      </div>
+                    ))}
+                    {!analytics?.summary.by_action || Object.keys(analytics.summary.by_action).length === 0 ? (
+                      <div className={styles.analytics_empty_small}>No custom actions logged for this client</div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
 
