@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styles from './PageOpp.module.css';
 import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, 
-  type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary, type MealBreakdownResponse, type MealBreakdownTotals, type MealIngredientBreakdown} from './types/frontendSchemas';
+type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary, type MealBreakdownResponse, type MealBreakdownTotals, type MealIngredientBreakdown} from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 
 // --- Types & Interfaces ---

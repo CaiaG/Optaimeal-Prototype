@@ -456,6 +456,22 @@ You MUST respond with a valid JSON object strictly matching the following schema
     finally:
         db.close()
 
+def calculate_meal_cost(ingredients_data, db) -> float:
+    """Calculates total meal cost based on ingredient prices and quantities."""
+    total_cost = 0.0
+    for item in ingredients_data:
+        # Handle both Pydantic models/dicts and database objects
+        ing_id = getattr(item, "ingredient_id", None) or (item.get("ingredient_id") if isinstance(item, dict) else None)
+        qty = getattr(item, "ingredient_quantity", 1.0) or (item.get("ingredient_quantity") if isinstance(item, dict) else 1.0)
+        qty = float(qty) if qty is not None else 1.0
+
+        if ing_id:
+            db_ing = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ing_id).first()
+            if db_ing and db_ing.price_per_unit:
+                total_cost += float(db_ing.price_per_unit) * qty
+                
+    return round(total_cost, 2)
+
 # ==========================================
 # Logging Schemas
 # ==========================================
@@ -607,11 +623,14 @@ def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
         **{field: round(val, 3) for field, val in running_totals.items()},
     )
 
+    calculated_price = round(total_cost, 2)
+    actual_price = float(meal.price_per_serving or 0.0)
+
     return MealBreakdownResponse(
         meal_id=meal.meal_id,
         meal_name=meal.meal_name,
         status=meal.status,
-        price_per_serving=float(meal.price_per_serving or 0.0),
+        price_per_serving=actual_price if actual_price > 0 else calculated_price,
         calories_per_serving=meal.calories_per_serving or 0.0,
         ingredients=ingredient_breakdowns,
         totals=totals_out,
@@ -640,11 +659,7 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
         )
 
     # STATE MACHINE
-    if not statemachine.can_edit_meal_in_place(existing_meal, db):
-        # Active meal: shared by >=1 live assignment, so we never mutate it
-        # directly. Fork a new Draft meal carrying the requested edits; the
-        # caller repoints whichever assignment(s) should use it (e.g. via
-        # /api/operator/menu/assign).
+    if not statemachine.can_edit_meal_in_place(existing_meal):
         forked = statemachine.fork_meal(
             db,
             meal_name=meal_data.meal_name,
@@ -679,24 +694,22 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
         )
         return format_meal(forked_full)
 
-
     existing_meal.meal_name = meal_data.meal_name
     existing_meal.parent_meal_id = meal_data.parent_meal_id
-    # existing_meal.status = meal_data.status
     existing_meal.calories_per_serving = meal_data.calories_per_serving
     existing_meal.nutritional_score = meal_data.nutritional_score
     existing_meal.price_per_serving = meal_data.price_per_serving
-
     
     db.query(models.MealIngredients).filter(
         models.MealIngredients.meal_id == meal_id
     ).delete(synchronize_session=False)
 
-    # 3. Re-insert updated join records
+    total_calculated_cost = 0.0
+
     for item in meal_data.ingredients:
         ing_id = item.ingredient_id
+        db_ing = None
 
-        # Fallback: handle ingredients added purely by text name
         if not ing_id and item.ingredient_name:
             clean_name = item.ingredient_name.strip()
             db_ing = (
@@ -709,20 +722,26 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
                 db.add(db_ing)
                 db.flush()
             ing_id = db_ing.ingredient_id
+        elif ing_id:
+            db_ing = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ing_id).first()
 
         if ing_id:
+            qty = round(float(item.ingredient_quantity if item.ingredient_quantity is not None else 1.0), 2)
             db.add(
                 models.MealIngredients(
                     meal_id=meal_id,
                     ingredient_id=ing_id,
-                    ingredient_quantity=round(
-                        float(item.ingredient_quantity if item.ingredient_quantity is not None else 1.0), 2
-                    ),
+                    ingredient_quantity=qty,
                     unit=item.unit or "unit",
                 )
             )
+            
+            if db_ing and db_ing.price_per_unit:
+                total_calculated_cost += float(db_ing.price_per_unit) * qty
 
-    
+    # Fallback to calculated cost if price is 0
+    if not existing_meal.price_per_serving or existing_meal.price_per_serving == 0.0:
+        existing_meal.price_per_serving = round(total_calculated_cost, 2)
 
     db.add(
         models.ChangeLog(
@@ -754,8 +773,18 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
 def assign_menu_to_client(
     request: MenuAssignmentRequest, db: Session = Depends(database.get_db)
 ):
+    # ADDED joinedload to ensure we can calculate ingredient cost if needed
+    meal = (
+        db.query(models.Meal)
+        .options(
+            joinedload(models.Meal.meal_ingredients).joinedload(
+                models.MealIngredients.ingredient
+            )
+        )
+        .filter(models.Meal.meal_id == request.meal_id)
+        .first()
+    )
     
-    meal = db.query(models.Meal).filter(models.Meal.meal_id == request.meal_id).first()
     if not meal:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -768,7 +797,6 @@ def assign_menu_to_client(
             detail="Archived menus cannot be assigned",
         )
 
-    
     client = (
         db.query(models.Client)
         .filter(models.Client.client_id == request.client_id)
@@ -780,7 +808,6 @@ def assign_menu_to_client(
             detail=f"Client with ID {request.client_id} not found in database",
         )
 
-    # Check for existing assignment for this client on this date
     existing_assignment = (
         db.query(models.MealAssignment)
         .filter(
@@ -791,12 +818,17 @@ def assign_menu_to_client(
     )
 
     was_overwritten = False
-    assigned_price = (
-        request.price_per_serving
-        if request.price_per_serving is not None
-        else (meal.price_per_serving or 0.0)
-    )
-    # assigned_status = request.status or "Scheduled"
+    
+    # PRICE RESOLUTION LOGIC
+    assigned_price = request.price_per_serving if request.price_per_serving else (meal.price_per_serving or 0.0)
+    
+    if assigned_price == 0.0:
+        calculated = 0.0
+        for mi in meal.meal_ingredients:
+            if mi.ingredient and mi.ingredient.price_per_unit:
+                calculated += float(mi.ingredient.price_per_unit) * (mi.ingredient_quantity or 1.0)
+        assigned_price = round(calculated, 2)
+        
     assigned_status = statemachine.resolve_assignment_status(request.assignment_date)
 
     if existing_assignment:
@@ -809,7 +841,6 @@ def assign_menu_to_client(
                     "locked for operator edits."
                 ),
             )
-
 
         previous_meal_id = existing_assignment.meal_id
 
@@ -832,13 +863,11 @@ def assign_menu_to_client(
 
         if log:
             if previous_meal_id != request.meal_id:
-                # Add previous meal ID to historical array
                 old_ids = list(log.old_meal_ids or [])
                 if previous_meal_id not in old_ids:
                     old_ids.append(previous_meal_id)
                 log.old_meal_ids = old_ids
 
-                # Append timeline entry to change_history
                 history = list(log.change_history or [])
                 history.append(
                     {
@@ -875,7 +904,6 @@ def assign_menu_to_client(
             )
             db.add(log)
 
-        # Revert previous meal to "Draft" ONLY if no other assignments reference it
         if previous_meal_id and previous_meal_id != request.meal_id:
             previous_meal = (
                 db.query(models.Meal)
@@ -886,10 +914,6 @@ def assign_menu_to_client(
                 statemachine.sync_meal_status(previous_meal, db)
 
     else:
-        # BUGFIX (TODO #16): previously there was no check here at all, so
-        # an operator could create a brand-new assignment directly into an
-        # already-Locked or Archived week/day, completely bypassing the
-        # 24h edit-lock rule that the overwrite branch above enforces.
         if assigned_status != AssignmentStatus.SCHEDULED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -900,7 +924,6 @@ def assign_menu_to_client(
                 ),
             )
 
-        # Create new assignment
         new_assignment = models.MealAssignment(
             client_id=request.client_id,
             meal_id=request.meal_id,
@@ -911,7 +934,6 @@ def assign_menu_to_client(
         db.add(new_assignment)
         db.flush()
 
-        # Create corresponding initial log entry
         new_log = models.MealAssignmentLog(
             assignment_id=new_assignment.id,
             client_id=request.client_id,
@@ -1044,7 +1066,6 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
     new_meal = models.Meal(
         meal_name=meal_data.meal_name.strip(),
         parent_meal_id=meal_data.parent_meal_id,
-        # status=meal_data.status,
         status=MealStatus.DRAFT,
         calories_per_serving=meal_data.calories_per_serving,
         nutritional_score=meal_data.nutritional_score,
@@ -1054,8 +1075,11 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
     db.add(new_meal)
     db.flush()
 
+    total_calculated_cost = 0.0
+
     for item in meal_data.ingredients:
         ing_id = item.ingredient_id
+        db_ing = None
 
         # Fallback: handle ingredients added purely by text name
         if not ing_id and item.ingredient_name:
@@ -1070,22 +1094,30 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
                 db.add(db_ing)
                 db.flush()
             ing_id = db_ing.ingredient_id
+        elif ing_id:
+            db_ing = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ing_id).first()
 
         if ing_id:
+            qty = round(float(item.ingredient_quantity if item.ingredient_quantity is not None else 1.0), 2)
             db.add(
                 models.MealIngredients(
                     meal_id=new_meal.meal_id,
                     ingredient_id=ing_id,
-                    ingredient_quantity=round(
-                        float(item.ingredient_quantity if item.ingredient_quantity is not None else 1.0), 2
-                    ),
+                    ingredient_quantity=qty,
                     unit=item.unit or "unit",
                 )
             )
+            # Accumulate cost
+            if db_ing and db_ing.price_per_unit:
+                total_calculated_cost += float(db_ing.price_per_unit) * qty
+
+    # Fallback to calculated cost if price is 0
+    if not new_meal.price_per_serving or new_meal.price_per_serving == 0.0:
+        new_meal.price_per_serving = round(total_calculated_cost, 2)
+    
 
     db.commit()
 
-    # Query freshly created meal with eager-loaded relationships for format_meal
     created_meal = (
         db.query(models.Meal)
         .options(

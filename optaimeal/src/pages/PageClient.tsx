@@ -20,6 +20,7 @@ interface ChatViewProps {
 
 interface CalendarViewProps {
   clientId: number | null;
+  numStudents: number | string;
 }
 
 interface ChatMessage {
@@ -93,16 +94,31 @@ export default function PageClient() {
       });
 
       if (existing) {
+        const mealObj = existing.meal || {};
         const mealDetails = existing.meal || existing;
+
+        const resolvedPrice = 
+          Number(mealObj.price_per_serving) || 
+          Number(existing.price_per_serving) || 
+          0;
+
+        const resolvedCalories = 
+          Number(mealObj.calories_per_serving) || 
+          Number(existing.calories_per_serving) || 
+          0;
 
         return {
           ...existing,
-          ...mealDetails, // Flattens meal_name, status, ingredients to top level
+          ...mealDetails, 
+          price_per_serving: resolvedPrice,
+          calories_per_serving: resolvedCalories,
           assignment_date: dateKey,
           day_name: dayName,
           isAssigned: true,
           meal: {
-            ...mealDetails,
+            ...mealObj,
+            price_per_serving: resolvedPrice,
+            calories_per_serving: resolvedCalories,
             assignment_date: dateKey,
           },
         };
@@ -277,6 +293,7 @@ export default function PageClient() {
          <CalendarView 
           
           clientId={clientId}
+          numStudents={numStudents}
           />
       )}
     </main>
@@ -413,7 +430,17 @@ export default function PageClient() {
               }}
               min="1"
             />
+
+            <p>
+              <strong>Estimated Price:</strong>{' '}
+              ${(
+              (Number(numStudents) || 1) * 
+              Number(meal?.price_per_serving ?? currentMeal?.price_per_serving ?? 0)
+              ).toFixed(2)}
+            </p>    
           </div>
+
+          
 
           {/* Ingredients List */}
           <div className={styles.ingredients_list}>
@@ -965,6 +992,13 @@ export default function PageClient() {
                   <p><strong>Calories:</strong> {currentMeal.calories_per_serving ?? 'N/A'} kcal</p>
                   <p><strong>Nutritional Score:</strong> {currentMeal.nutritional_score ?? 'N/A'}</p>
                   <p><strong>Target Servings:</strong> {numStudents || 1}</p>
+                  <p>
+                    <strong>Estimated Price:</strong>{' '}
+                    ${(
+                      (Number(numStudents) || 1) * 
+                      Number(currentAssignment?.price_per_serving ?? currentMeal?.price_per_serving ?? 0)
+                    ).toFixed(2)}
+                  </p>             
                 </div>
 
                 <section className={styles.ingredients}>
@@ -1049,7 +1083,7 @@ export default function PageClient() {
   }
 }
 
-function CalendarView({ clientId }: CalendarViewProps) {
+function CalendarView({ clientId, numStudents }: CalendarViewProps) {
   type CalendarAssignments = Record<number, Record<string, string>>;
 
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
@@ -1133,6 +1167,14 @@ function CalendarView({ clientId }: CalendarViewProps) {
           const backendMatch = safeAssignments.find(a => a?.assignment_date === dateKey);
           const backendMeal = backendMatch?.meal?.meal_name;
 
+          const pricePerServing = Number(
+            backendMatch?.price_per_serving ?? 
+            backendMatch?.meal?.price_per_serving ?? 
+            0
+          );
+          
+          const totalCostEst = pricePerServing * Number(numStudents);
+
           const assignedMeal = localMeal || backendMeal;
           return (
             <div 
@@ -1147,9 +1189,12 @@ function CalendarView({ clientId }: CalendarViewProps) {
               
               {assignedMeal && (
                 <div className={styles.assignment_tag}>
-                  {assignedMeal}
+                  <div className={styles.meal_name}>{assignedMeal}</div>
+                  <div className={styles.price_estimation} style={{ fontSize: '0.8rem', opacity: 0.85 }}>
+                    <span>${pricePerServing.toFixed(2)}/serv</span> | <span>Est: ${totalCostEst.toFixed(2)}</span>
+                  </div>
                 </div>
-              )}                  
+              )}            
               
                                
             </div>
