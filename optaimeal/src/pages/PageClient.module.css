@@ -34,6 +34,43 @@
   animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.day_details_modal {
+  max-width: 460px;
+  text-align: left;
+}
+
+.day_details_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.75rem;
+}
+
+.day_details_close {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #64748b;
+}
+
+.day_details_meta p {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.day_details_ingredients {
+  margin-top: 1rem;
+}
+
+.day_details_ingredients ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
 .client_modal h3 {
   margin: 0 0 0.5rem 0;
   font-size: 1.35rem;
@@ -856,7 +893,6 @@ CSS
 .meal_selector_box {
   flex: 0 0 350px;
   min-width: 320px;
-  
   border-left: 1px solid #ccc;
   padding: 10px;
   background: #f9f9f9;
@@ -881,6 +917,8 @@ CSS
   transition: all 0.2s ease;
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
   font-size: 1.2rem;
+  overflow-y: auto;
+  max-height: 400px;
 }
 
 .chat_meal_btns {

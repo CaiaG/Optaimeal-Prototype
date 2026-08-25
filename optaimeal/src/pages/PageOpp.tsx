@@ -3,6 +3,9 @@ import styles from './PageOpp.module.css';
 import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, 
 type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary, type MealBreakdownResponse, type MealBreakdownTotals, type MealIngredientBreakdown} from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
 
 // --- Types & Interfaces ---
 
@@ -974,22 +977,27 @@ function GenerateView({
             <h3>Ingredients List</h3>
 
             {/* Structured Line Items List */}
-            {/*restrict ingredient quantity to 2 decimal places pls */}
             <ul className={styles.ingredients_list}>
-              {meal?.ingredients?.map((ing: MealIngredient, i: number) => (
-                <li key={`${ing.ingredient_id}-${i}`} className={styles.ingredient_item}>
-                  <span>
-                    <strong>{ing.ingredient_quantity} {ing.unit}</strong> - {ing.ingredient_name}
-                  </span>
-                  <button 
-                    type="button"
-                    className={styles.remove_ing} 
-                    onClick={() => handleRemoveIngredient(i)}
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
+              {meal?.ingredients?.map((ing: MealIngredient, i: number) => {
+                const formattedQty = typeof ing.ingredient_quantity === 'number' 
+                  ? Number(ing.ingredient_quantity.toFixed(2)) 
+                  : ing.ingredient_quantity;
+
+                return (
+                  <li key={`${ing.ingredient_id}-${i}`} className={styles.ingredient_item}>
+                    <span>
+                      <strong>{formattedQty} {ing.unit}</strong> - {ing.ingredient_name}
+                    </span>
+                    <button 
+                      type="button"
+                      className={styles.remove_ing} 
+                      onClick={() => handleRemoveIngredient(i)}
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
 
             {/* Add Ingredient Combobox & Controls */}
@@ -1030,7 +1038,6 @@ function GenerateView({
                   <option value="tbsp">tbsp</option>
                   <option value="tsp">tsp</option>
                   <option value="slice">slice</option>
-                  
                 </select>
               </div>
 
@@ -1095,8 +1102,6 @@ function GenerateView({
               )}
             </div>
           </section>
-
-          
         </section>
         
         <section className={styles.llm_tool_section}>
@@ -1108,9 +1113,16 @@ function GenerateView({
           <div className={styles.chatbot_interface}>
             <div className={styles.chat_window}>
               {chatHistory.map((msg: any, index: number) => (
-                <p key={index} className={msg.sender === 'System' ? styles.system_msg : styles.user_msg}>
-                  <strong>{msg.sender}:</strong> {msg.text}
-                </p>
+                <div key={index} className={msg.sender === 'System' ? styles.system_msg : styles.user_msg}>
+                  <div className={styles.msg_header}>
+                    <strong>{msg.sender}:</strong>
+                  </div>
+                  <div className={styles.msg_body}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.text}
+                    </ReactMarkdown>
+                  </div>
+                </div>
               ))}
             </div>
 
@@ -1253,15 +1265,23 @@ const AnimatedCalendarWrapper = ({ children }: { children: React.ReactNode }) =>
 );
 
 function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }: CalendarViewProps) {
-  type CalendarAssignments = Record<number, Record<string, string>>;
-
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
-  
-  const [calendarAssignments, setCalendarAssignments] = useState<CalendarAssignments>({});
-  const [activeMenuDate, setActiveMenuDate] = useState<string | null>(null);
+
   // loading not in use
   const [loading, setLoading] = useState<boolean>(false);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+
+  // Multi-select ("batch push") mode
+  const [selectionMode, setSelectionMode] = useState<boolean>(false);
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
+
+  // Meal-picker modal: pickerDates holds the date(s) the picker is currently
+  // assigning to - a single date for a normal click, or every selected date
+  // when pushed via the batch bar.
+  const [pickerDates, setPickerDates] = useState<string[] | null>(null);
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [isPushing, setIsPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<string | null>(null);
 
   const daysInMonth = (month: number, year: number): number => new Date(year, month + 1, 0).getDate();
   const startDayOfMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay();
@@ -1270,9 +1290,9 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
     setLoading(true);
     try {
       const data = await apiFetch<any>(`/api/client/${clientId}/assignments`);
-      
-      const assignmentArray = Array.isArray(data) 
-        ? data 
+
+      const assignmentArray = Array.isArray(data)
+        ? data
         : (data?.assignments || []);
 
       setAssignments(assignmentArray);
@@ -1283,38 +1303,109 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
     }
   };
 
-    useEffect(() => {
-      if (selectedClientId) {
-        fetchClientAssignments(selectedClientId);
-      }
-    }, [selectedClientId]);
-
-    
-  const handleSelectSavedMeal = (day: number, meal: MealPlan): void => {
-    if (selectedClientId === null) return;
-    
-    const month = String(calendarDate.getMonth() + 1).padStart(2, '0');
-    const d = String(day).padStart(2, '0');
-    const dateKey = `${calendarDate.getFullYear()}-${month}-${d}`;
-
-    setCalendarAssignments((prev) => ({
-      ...prev,
-      [selectedClientId]: {
-        ...(prev[selectedClientId] || {}),
-        [dateKey]: meal.meal_name, 
-      },
-    }));
-    setActiveMenuDate(null);
-  };
+  useEffect(() => {
+    if (selectedClientId) {
+      fetchClientAssignments(selectedClientId);
+    }
+  }, [selectedClientId]);
 
   const isDateLocked = (day: number): boolean => {
     const cellDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), day);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return cellDate < today;
+    return cellDate <= today;
   };
 
-  // add handler for pushing meals
+  const dateKeyFor = (day: number) => {
+    const month = String(calendarDate.getMonth() + 1).padStart(2, '0');
+    const d = String(day).padStart(2, '0');
+    return `${calendarDate.getFullYear()}-${month}-${d}`;
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode((prev) => !prev);
+    setSelectedDates(new Set());
+  };
+
+  const toggleDateSelected = (dateKey: string) => {
+    setSelectedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) {
+        next.delete(dateKey);
+      } else {
+        next.add(dateKey);
+      }
+      return next;
+    });
+  };
+
+  const handleCellClick = (day: number, locked: boolean) => {
+    if (locked) return;
+    const dateKey = dateKeyFor(day);
+
+    if (selectionMode) {
+      toggleDateSelected(dateKey);
+    } else {
+      setPickerSearch('');
+      setPickerDates([dateKey]);
+    }
+  };
+
+  const openBatchPicker = () => {
+    if (selectedDates.size === 0) return;
+    setPickerSearch('');
+    setPickerDates(Array.from(selectedDates).sort());
+  };
+
+  const handlePushMeal = async (meal: MealPlan) => {
+    if (!selectedClientId || !pickerDates || pickerDates.length === 0 || !meal.meal_id) return;
+
+    setIsPushing(true);
+    setPushResult(null);
+
+    const results = await Promise.allSettled(
+      pickerDates.map((dateKey) =>
+        apiFetch<{ message: string }>('/api/operator/menu/assign', {
+          method: 'POST',
+          body: JSON.stringify({
+            meal_id: meal.meal_id,
+            client_id: selectedClientId,
+            assignment_date: dateKey,
+            price_per_serving: Number(meal.price_per_serving) || 0.0,
+            status: 'Scheduled',
+          }),
+        })
+      )
+    );
+
+    const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.length - succeeded;
+
+    setIsPushing(false);
+    setPickerDates(null);
+    setSelectionMode(false);
+    setSelectedDates(new Set());
+
+    setPushResult(
+      failed === 0
+        ? `Assigned "${meal.meal_name}" to ${succeeded} day${succeeded === 1 ? '' : 's'}.`
+        : `Assigned "${meal.meal_name}" to ${succeeded} day${succeeded === 1 ? '' : 's'}; ${failed} day${failed === 1 ? '' : 's'} could not be updated (likely already locked).`
+    );
+
+    if (selectedClientId) {
+      fetchClientAssignments(selectedClientId);
+    }
+  };
+
+  const filteredPickerMeals = (meals || []).filter((m) =>
+    m.meal_name?.toLowerCase().includes(pickerSearch.trim().toLowerCase())
+  );
+
+  const formatDateLabel = (dateKey: string) => {
+    const d = new Date(`${dateKey}T12:00:00`);
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
   return (
     <AnimatedCalendarWrapper>
       <header className={styles.calendar_header}>
@@ -1342,6 +1433,17 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
             Next &gt;
           </button>
         </div>
+
+        {/* batch push meals unimplemented */}
+        <button
+          type="button"
+          className={styles.batch_toggle_btn}
+          onClick={toggleSelectionMode}
+          disabled={!selectedClientId}
+          title={!selectedClientId ? 'Select a client first' : undefined}
+        >
+          {selectionMode ? 'Cancel Batch Select' : 'Batch Push Meals'}
+        </button>
       </header>
 
       <div className={styles.calendar_grid}>
@@ -1355,30 +1457,25 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
 
         {[...Array(daysInMonth(calendarDate.getMonth(), calendarDate.getFullYear()))].map((_, i) => {
           const day = i + 1;
-          const month = String(calendarDate.getMonth() + 1).padStart(2, '0');
-          const d = String(day).padStart(2, '0');
-          const dateKey = `${calendarDate.getFullYear()}-${month}-${d}`;          
-          // console.log("Calendar dateKey:", dateKey, "Assignments loaded:", assignments);
-          const localMeal = (selectedClientId && calendarAssignments?.[selectedClientId]) 
-            ? calendarAssignments[selectedClientId][dateKey] 
-            : null;
+          const dateKey = dateKeyFor(day);
 
           const safeAssignments = Array.isArray(assignments) ? assignments : [];
           const backendMatch = safeAssignments.find(a => a?.assignment_date === dateKey);
-          const backendMeal = backendMatch?.meal?.meal_name;
+          const assignedMeal = backendMatch?.meal?.meal_name;
 
-          const assignedMeal = localMeal || backendMeal;
           const locked = isDateLocked(day);
+          const isSelected = selectionMode && selectedDates.has(dateKey);
+
           return (
             <div 
               key={day} 
-              className={`${styles.calendar_cell} ${locked ? styles.locked : ''}`}
-              onClick={() => !locked && setActiveMenuDate(dateKey)} 
+              className={`${styles.calendar_cell} ${locked ? styles.locked : ''} ${isSelected ? styles.calendar_cell_selected : ''}`}
+              onClick={() => handleCellClick(day, locked)}
             >                    
               <div className={styles.cell_header}>
                 <span className={styles.cell_date}>{day}</span>
                 <span className={locked ? styles.lock_icon : styles.add_icon}>
-                  {locked ? '🔒' : '+'}
+                  {locked ? '🔒' : selectionMode ? (isSelected ? '✓' : '+') : '+'}
                 </span>
               </div>
               
@@ -1386,43 +1483,82 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
                 <div className={styles.assignment_tag}>
                   {assignedMeal}
                 </div>
-              )}                  
-              
-              {!locked && activeMenuDate === dateKey && (
-                <div className={styles.dummy_menu_popup}>
-                  <header className={styles.popup_header}>
-                    <span>Saved Meals</span>
-                    <button onClick={(e) => { e.stopPropagation(); setActiveMenuDate(null); }}>x</button>
-                  </header>
-                  <div className={styles.saved_meal_list}>
-                    {meals && meals.length > 0 ? (
-                      meals.map((meal: any) => (
-                        <div 
-                          key={meal.meal_id} 
-                          className={styles.dummy_menu_item}
-                          onClick={(e) => { e.stopPropagation(); handleSelectSavedMeal(day, meal); }}
-                        >
-                          {meal.meal_name}
-                        </div>
-                      ))
-                    ) : (
-                      <div style={{ padding: '0.5rem', fontSize: '0.8rem', color: '#888' }}>
-                        No saved meals available
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}                    
+              )}
             </div>
           );
         })}
       </div>
 
-      <footer className={styles.calendar_actions}>
-        <button className={styles.push_active_btn} onClick={() => alert("Assignments Pushed to Active Status")}>
-          Push Weekly Assignments to School
-        </button>
-      </footer>      
+      {selectionMode && (
+        <footer className={styles.batch_action_bar}>
+          <span>{selectedDates.size} day{selectedDates.size === 1 ? '' : 's'} selected</span>
+          <button
+            type="button"
+            className={styles.push_active_btn}
+            onClick={openBatchPicker}
+            disabled={selectedDates.size === 0}
+          >
+            Choose Meal &amp; Push
+          </button>
+        </footer>
+      )}
+
+      {pushResult && (
+        <div className={styles.push_result_banner}>
+          {pushResult}
+          <button type="button" onClick={() => setPushResult(null)}>x</button>
+        </div>
+      )}
+
+      {pickerDates && (
+        <div className={styles.modal_overlay} onClick={() => !isPushing && setPickerDates(null)}>
+          <div className={styles.modal_content} onClick={(e) => e.stopPropagation()}>
+            <h3>Assign Meal</h3>
+            <p className={styles.picker_subtitle}>
+              {pickerDates.length === 1
+                ? `Assigning to ${formatDateLabel(pickerDates[0])}`
+                : `Assigning to ${pickerDates.length} selected days: ${pickerDates.map(formatDateLabel).join(', ')}`}
+            </p>
+
+            <input
+              type="text"
+              autoFocus
+              placeholder="Search saved meals..."
+              value={pickerSearch}
+              onChange={(e) => setPickerSearch(e.target.value)}
+              className={styles.picker_search_input}
+              disabled={isPushing}
+            />
+
+            <div className={styles.picker_meal_list}>
+              {filteredPickerMeals.length > 0 ? (
+                filteredPickerMeals.map((meal) => (
+                  <button
+                    type="button"
+                    key={meal.meal_id}
+                    className={styles.picker_meal_item}
+                    onClick={() => handlePushMeal(meal)}
+                    disabled={isPushing}
+                  >
+                    <span className={styles.picker_meal_name}>{meal.meal_name}</span>
+                    <span className={styles.picker_meal_meta}>
+                      {meal.calories_per_serving ?? 0} kcal &bull; {meal.status}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className={styles.picker_meal_empty}>No saved meals match your search.</div>
+              )}
+            </div>
+
+            <div className={styles.modal_actions}>
+              <button type="button" className={styles.cancel_button} onClick={() => setPickerDates(null)} disabled={isPushing}>
+                {isPushing ? 'Pushing...' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AnimatedCalendarWrapper>
   );
 }
@@ -1952,5 +2088,3 @@ function AnalyticsView({ meals, clients }: AnalyticsViewProps) {
     </div>
   );
 }
-
- 

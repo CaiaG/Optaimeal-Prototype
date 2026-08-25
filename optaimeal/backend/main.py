@@ -361,7 +361,7 @@ def format_meal(meal: Any) -> dict:
     }
 
 def enrich_ingredient_in_background(ingredient_id: int, db_session_factory):
-    """Fills in missing base fields AND attaches nutrition profile in a single task."""
+    """Fills in missing base fields AND attaches nutrition profile in a single task. Also will update if fields already exist"""
     db = db_session_factory()
     try:
         ingredient = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ingredient_id).first()
@@ -1002,7 +1002,7 @@ def get_menu_analytics(
 def get_all_ingredients(db: Session = Depends(database.get_db)):
     return db.query(models.Ingredient).order_by(models.Ingredient.ingredient_name.asc()).all()
 
-
+# post new ingredient
 @app.post("/api/ingredients", response_model=IngredientOut, status_code=status.HTTP_201_CREATED)
 def create_ingredient(
     payload: IngredientCreate, 
@@ -1358,10 +1358,11 @@ def regenerate_meal_options(
         3. **Metadata Tracking:** Always include a `version_number` integer (1 for original, 2 for v2, etc.) and a `version_label` string (e.g., "", "v2", "v3") in your JSON response structure.
         
         
+        
         ### REQUIRED JSON OUTPUT FORMAT
         You MUST reply strictly with a valid JSON object matching this structure:
         {{
-            "reply": "A brief message to the user explaining the adjustments made.",
+            "reply": "A concise message to the user explaining the adjustments made.",
             "edited_meal": {{
                 "meal_id": {meal.meal_id},
                 "meal_name": "Adjusted Meal Name",
@@ -1684,7 +1685,7 @@ def chat_with_groq(
         "You are an AI nutrition and meal planning assistant. "
         f"You are talking with client ID {request.client_id} regarding their menu for {request.assignment_date}. "
         f"{current_meal_info} "
-        "Provide concise, practical, and friendly answers to questions about ingredients, substitutions, or menu tweaks."
+        "Provide concise, practical, and friendly answers to questions about ingredients, substitutions, or menu tweaks. "
     )
 
     # Call Groq API
@@ -1721,7 +1722,7 @@ def operator_meal_generation_chat(
         "You are an expert AI culinary assistant and institutional meal planning advisor "
         "helping a facility operator formulate, modify, and optimize recipes. "
         f"{meal_context} "
-        "Provide clear, practical, and creative culinary advice, suggest ingredient substitutions "
+        "Provide clear, practical, and concise culinary advice, suggest ingredient substitutions "
         "that work around the listed inventory constraints, and help tailor recipes for batch serving."
     )
 
