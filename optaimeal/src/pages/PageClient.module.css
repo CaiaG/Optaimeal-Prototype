@@ -997,6 +997,7 @@ CSS
   transition: transform 0.1s, background 0.2s;
   display: flex;
   flex-direction: column;
+  width: 140px;
 }
 
 .calendar_cell:hover {
@@ -1030,9 +1031,15 @@ CSS
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: pointer;
   transition: all 0.2s ease-in-out;
+
+  width: 100%;
+  box-sizing: border-box;
+  white-space: normal;        
+  word-break: break-word;      
+  overflow-wrap: break-word;
+  display: block;
 }
 
 .assignment_tag:hover {

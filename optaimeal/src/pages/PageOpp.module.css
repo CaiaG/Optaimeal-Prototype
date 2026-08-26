@@ -976,25 +976,6 @@
   font-size: 0.8rem;
 }
 
-.calendar_cell {
-  background: #fafafa;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  min-height: 100px;
-  padding: 8px;
-  cursor: pointer;
-  transition: transform 0.1s, background 0.2s;
-  display: flex;
-  flex-direction: column;
-}
-
-.calendar_cell:hover {
-  background: #fff5f5; 
-  transform: translateY(-2px);
-  position: relative;
-}
-
-
 .cell_header {
   display: flex;
   justify-content: space-between;
@@ -1008,16 +989,49 @@
 }
 
 .assignment_tag {
-  background: #cc2b2b; 
-  color: white;
+  background: #eff6ff; 
+  color: #1e40af;       
+  border: 1px solid #bfdbfe;
   font-size: 0.75rem;
-  padding: 4px 8px;
-  border-radius: 4px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
   margin-top: auto;
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+
+  width: 100%;
+  box-sizing: border-box;
+  white-space: normal;        
+  word-break: break-word;      
+  overflow-wrap: break-word;
+  display: block;
+}
+
+.assignment_tag:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.1);
+}
+
+.assignment_tag_staged {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px dashed #ffeeba;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.assignment_tag_staged span:first-child {
+  min-width: 0;
+  flex: 1;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .day_empty {
@@ -1061,6 +1075,26 @@
   gap: 0.5rem;
   margin-top: 1rem;
 }
+
+.calendar_cell {
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  min-height: 100px;
+  width: 140px;
+  padding: 8px;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+
+.calendar_cell:hover {
+  background: #fff5f5; 
+  transform: translateY(-2px);
+  position: relative;
+}
+
 
 .calendar_cell_selected {
   border-color: #cc2b2b;
@@ -1256,25 +1290,30 @@
 }
 
 .modal_overlay {
-  position: fixed; 
+  position: fixed;
+  top: 0;
   left: 0;
-  width: 100%;   
-  height: 100%;   
-  background: rgba(0, 0, 0, 0.6);
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5);
   display: flex;
-  justify-content: center; 
-  align-items: center;    
-  z-index: 9999;         
+  justify-content: center;
+  align-items: center;
+  z-index: 9999; /* Ensure high stacking layer */
 }
 
 .modal_content {
-  background: white;
-  padding: 2rem;
+  background-color: #ffffff;
+  padding: 24px;
   border-radius: 8px;
-  width: 400px;
-  max-width: 90%;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-  color: #333; 
+  width: 90%;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+  z-index: 10000;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
 }
 
 /* ==========================================
@@ -1605,3 +1644,73 @@
   font-size: 0.9rem;
   margin-bottom: 1.25rem;
 }
+
+
+/* Cell Staging Styles */
+.calendar_cell_staged {
+  border-color: #ffeeba;
+  background-color: #fffdf5;
+}
+
+.assignment_tag_staged {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px dashed #ffeeba;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.clear_staged_btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  margin-left: 4px;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.clear_staged_btn:hover {
+  color: #a71d2a;
+}
+
+/* Floating Action Bar */
+.batch_action_bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background-color: #ffffff;
+  border-top: 1px solid #e0e0e0;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+  margin-top: 16px;
+  border-radius: 8px;
+}
+
+.batch_info_text {
+  font-size: 14px;
+  color: #333333;
+}
+
+.push_batch_btn {
+  background-color: #4caf50;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.push_batch_btn:hover:not(:disabled) {
+  background-color: #45a049;
+}
+
+.push_batch_btn:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+

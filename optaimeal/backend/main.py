@@ -233,6 +233,32 @@ class MenuAssignmentRequest(BaseModel):
     status: Optional[str] = "Draft"
     price_per_serving: Optional[float] = 0.0
 
+class BatchAssignmentItem(BaseModel):
+    client_id: int
+    meal_id: int
+    assignment_date: date
+    price_per_serving: Optional[float] = None
+ 
+ 
+class BatchAssignmentRequest(BaseModel):
+    assignments: List[BatchAssignmentItem]
+ 
+ 
+class BatchAssignmentResultItem(BaseModel):
+    client_id: int
+    meal_id: int
+    assignment_date: date
+    success: bool
+    message: str
+    overwritten: bool = False
+    price_per_serving: Optional[float] = None
+ 
+ 
+class BatchAssignmentResponse(BaseModel):
+    total: int
+    succeeded: int
+    failed: int
+    results: List[BatchAssignmentResultItem]
 
 class ClientAssignmentResponse(BaseModel):
     id: int
@@ -971,8 +997,253 @@ def assign_menu_to_client(
         "price_per_serving": assigned_price,
     }
 
+@app.post("/api/operator/menu/assign/batch", response_model=BatchAssignmentResponse)
+def batch_assign_menu_to_clients(
+    request: BatchAssignmentRequest, db: Session = Depends(database.get_db)
+):
+    """
+    Push many (client, date) -> meal assignments in a single request.
 
-# Access accumulated reports of client changes: UNIMPLEMENTED
+    This backs the operator calendar's "batch push" flow: instead of firing
+    one HTTP round trip + several DB queries per selected day (which is what
+    looping calls to /api/operator/menu/assign does), everything needed is
+    bulk-fetched up front in a constant number of queries, the whole batch
+    is applied in-memory, and the result is written back in ONE commit -
+    so pushing 20 days costs roughly the same number of queries as pushing 2.
+    """
+    items = request.assignments
+    if not items:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No assignments provided")
+    if len(items) > 500:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Batch too large; split into requests of 500 assignments or fewer",
+        )
+
+    # Bulk-fetch everything the batch could possibly touch (fixed
+    # number of queries, independent of len(items)) 
+    meal_ids = {i.meal_id for i in items}
+    client_ids = {i.client_id for i in items}
+    assignment_dates = {i.assignment_date for i in items}
+
+    meals_by_id: Dict[int, models.Meal] = {
+        m.meal_id: m
+        for m in db.query(models.Meal)
+        .options(
+            joinedload(models.Meal.meal_ingredients).joinedload(
+                models.MealIngredients.ingredient
+            )
+        )
+        .filter(models.Meal.meal_id.in_(meal_ids))
+        .all()
+    }
+
+    clients_by_id: Dict[int, models.Client] = {
+        c.client_id: c
+        for c in db.query(models.Client).filter(models.Client.client_id.in_(client_ids)).all()
+    }
+
+    # Superset fetch (all rows for these clients on these dates), then match
+    # exact (client_id, assignment_date) pairs in Python - avoids relying on
+    # composite tuple_().in_() support, which isn't consistent across DBs.
+    existing_by_key: Dict[tuple, models.MealAssignment] = {}
+    if client_ids and assignment_dates:
+        candidate_rows = (
+            db.query(models.MealAssignment)
+            .filter(
+                models.MealAssignment.client_id.in_(client_ids),
+                models.MealAssignment.assignment_date.in_(assignment_dates),
+            )
+            .all()
+        )
+        for row in candidate_rows:
+            existing_by_key[(row.client_id, row.assignment_date)] = row
+
+    existing_ids = [a.id for a in existing_by_key.values()]
+    logs_by_assignment_id: Dict[int, models.MealAssignmentLog] = {}
+    if existing_ids:
+        for log in (
+            db.query(models.MealAssignmentLog)
+            .filter(models.MealAssignmentLog.assignment_id.in_(existing_ids))
+            .all()
+        ):
+            logs_by_assignment_id[log.assignment_id] = log
+
+    results: List[BatchAssignmentResultItem] = []
+    touched_meal_ids: set = set()
+    now_iso = datetime.utcnow().isoformat()
+
+    for item in items:
+        meal = meals_by_id.get(item.meal_id)
+        client = clients_by_id.get(item.client_id)
+        key = (item.client_id, item.assignment_date)
+
+        if not meal:
+            results.append(BatchAssignmentResultItem(
+                client_id=item.client_id, meal_id=item.meal_id, assignment_date=item.assignment_date,
+                success=False, message=f"Meal {item.meal_id} not found",
+            ))
+            continue
+
+        if not client:
+            results.append(BatchAssignmentResultItem(
+                client_id=item.client_id, meal_id=item.meal_id, assignment_date=item.assignment_date,
+                success=False, message=f"Client {item.client_id} not found",
+            ))
+            continue
+
+        if not statemachine.can_assign_meal(meal):
+            results.append(BatchAssignmentResultItem(
+                client_id=item.client_id, meal_id=item.meal_id, assignment_date=item.assignment_date,
+                success=False, message="Archived menus cannot be assigned",
+            ))
+            continue
+
+        assigned_price = item.price_per_serving if item.price_per_serving else (meal.price_per_serving or 0.0)
+        if assigned_price == 0.0:
+            calculated = 0.0
+            for mi in meal.meal_ingredients:
+                if mi.ingredient and mi.ingredient.price_per_unit:
+                    calculated += float(mi.ingredient.price_per_unit) * (mi.ingredient_quantity or 1.0)
+            assigned_price = round(calculated, 2)
+
+        existing = existing_by_key.get(key)
+        was_overwritten = False
+
+        if existing:
+            statemachine.sync_assignment_status(existing)
+            if not statemachine.can_operator_edit_assignment(existing):
+                results.append(BatchAssignmentResultItem(
+                    client_id=item.client_id, meal_id=item.meal_id, assignment_date=item.assignment_date,
+                    success=False,
+                    message=f"Assignment is '{existing.status}' and locked for operator edits",
+                ))
+                continue
+
+            previous_meal_id = existing.meal_id
+            existing.meal_id = item.meal_id
+            existing.status = statemachine.resolve_assignment_status(item.assignment_date)
+            existing.price_per_serving = assigned_price
+            was_overwritten = True
+
+            log = logs_by_assignment_id.get(existing.id)
+            if log:
+                if previous_meal_id != item.meal_id:
+                    old_ids = list(log.old_meal_ids or [])
+                    if previous_meal_id not in old_ids:
+                        old_ids.append(previous_meal_id)
+                    log.old_meal_ids = old_ids
+
+                    history = list(log.change_history or [])
+                    history.append({
+                        "timestamp": now_iso,
+                        "action": "SWAP",
+                        "previous_meal_id": previous_meal_id,
+                        "new_meal_id": item.meal_id,
+                        "source": "OPERATOR_BATCH_UPDATE",
+                    })
+                    log.change_history = history
+                    log.current_meal_id = item.meal_id
+                    log.action = "SWAP"
+            else:
+                log = models.MealAssignmentLog(
+                    assignment_id=existing.id,
+                    client_id=item.client_id,
+                    assignment_date=item.assignment_date,
+                    current_meal_id=item.meal_id,
+                    old_meal_ids=[previous_meal_id] if previous_meal_id != item.meal_id else [],
+                    change_history=[{
+                        "timestamp": now_iso,
+                        "action": "OVERWRITE",
+                        "previous_meal_id": previous_meal_id,
+                        "new_meal_id": item.meal_id,
+                        "source": "OPERATOR_BATCH_UPDATE",
+                    }],
+                    action="SWAP" if previous_meal_id != item.meal_id else "ASSIGN",
+                    source="OPERATOR_BATCH_UPDATE",
+                )
+                db.add(log)
+                logs_by_assignment_id[existing.id] = log
+
+            if previous_meal_id and previous_meal_id != item.meal_id:
+                touched_meal_ids.add(previous_meal_id)
+
+        else:
+            assigned_status = statemachine.resolve_assignment_status(item.assignment_date)
+            if assigned_status != AssignmentStatus.SCHEDULED:
+                results.append(BatchAssignmentResultItem(
+                    client_id=item.client_id, meal_id=item.meal_id, assignment_date=item.assignment_date,
+                    success=False,
+                    message=(
+                        f"Cannot create a new assignment for {item.assignment_date.isoformat()}; "
+                        f"that date's week is already '{assigned_status}' and outside the operator edit window"
+                    ),
+                ))
+                continue
+
+            new_assignment = models.MealAssignment(
+                client_id=item.client_id,
+                meal_id=item.meal_id,
+                assignment_date=item.assignment_date,
+                status=assigned_status,
+                price_per_serving=assigned_price,
+            )
+            db.add(new_assignment)
+            db.flush()  # need the new id, and register it below so a duplicate
+                        # (client, date) later in the same batch updates instead
+                        # of violating the unique constraint
+
+            new_log = models.MealAssignmentLog(
+                assignment_id=new_assignment.id,
+                client_id=item.client_id,
+                assignment_date=item.assignment_date,
+                current_meal_id=item.meal_id,
+                old_meal_ids=[],
+                change_history=[{
+                    "timestamp": now_iso,
+                    "action": "INITIAL_ASSIGNMENT",
+                    "meal_id": item.meal_id,
+                    "source": "OPERATOR_BATCH_UPDATE",
+                }],
+                action="ASSIGN",
+                source="OPERATOR_BATCH_UPDATE",
+            )
+            db.add(new_log)
+
+            existing_by_key[key] = new_assignment
+            logs_by_assignment_id[new_assignment.id] = new_log
+
+        touched_meal_ids.add(item.meal_id)
+
+        results.append(BatchAssignmentResultItem(
+            client_id=item.client_id, meal_id=item.meal_id, assignment_date=item.assignment_date,
+            success=True,
+            message=(
+                f"Overwrote existing assignment with '{meal.meal_name}'" if was_overwritten
+                else f"Assigned '{meal.meal_name}'"
+            ),
+            overwritten=was_overwritten,
+            price_per_serving=assigned_price,
+        ))
+
+    # Sync each touched meal's Draft/Active status once, not once per row
+    for mid in touched_meal_ids:
+        m = meals_by_id.get(mid)
+        if m:
+            statemachine.sync_meal_status(m, db)
+
+    db.commit()
+
+    succeeded = sum(1 for r in results if r.success)
+    return BatchAssignmentResponse(
+        total=len(items),
+        succeeded=succeeded,
+        failed=len(items) - succeeded,
+        results=results,
+    )
+
+
+# Access accumulated reports of client changes
 @app.get("/api/operator/menu/analytics")
 def get_menu_analytics(
     client_id: Optional[int] = None,

@@ -1266,20 +1266,16 @@ const AnimatedCalendarWrapper = ({ children }: { children: React.ReactNode }) =>
 
 function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }: CalendarViewProps) {
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
-
-  // loading not in use
   const [loading, setLoading] = useState<boolean>(false);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
 
-  // Multi-select ("batch push") mode
-  const [selectionMode, setSelectionMode] = useState<boolean>(false);
-  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
+  // Staged meals waiting to be pushed: maps dateKey -> MealPlan
+  const [stagedMeals, setStagedMeals] = useState<Record<string, MealPlan>>({});
 
-  // Meal-picker modal: pickerDates holds the date(s) the picker is currently
-  // assigning to - a single date for a normal click, or every selected date
-  // when pushed via the batch bar.
+  // Meal-picker modal state
   const [pickerDates, setPickerDates] = useState<string[] | null>(null);
   const [pickerSearch, setPickerSearch] = useState('');
+
   const [isPushing, setIsPushing] = useState(false);
   const [pushResult, setPushResult] = useState<string | null>(null);
 
@@ -1290,11 +1286,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
     setLoading(true);
     try {
       const data = await apiFetch<any>(`/api/client/${clientId}/assignments`);
-
-      const assignmentArray = Array.isArray(data)
-        ? data
-        : (data?.assignments || []);
-
+      const assignmentArray = Array.isArray(data) ? data : (data?.assignments || []);
       setAssignments(assignmentArray);
     } catch (err) {
       console.error('Error fetching assignments:', err);
@@ -1306,6 +1298,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
   useEffect(() => {
     if (selectedClientId) {
       fetchClientAssignments(selectedClientId);
+      setStagedMeals({});
     }
   }, [selectedClientId]);
 
@@ -1322,78 +1315,75 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
     return `${calendarDate.getFullYear()}-${month}-${d}`;
   };
 
-  const toggleSelectionMode = () => {
-    setSelectionMode((prev) => !prev);
-    setSelectedDates(new Set());
+  const handleCellClick = (day: number, locked: boolean) => {
+    if (locked || !selectedClientId) return;
+    const dateKey = dateKeyFor(day);
+    setPickerSearch('');
+    setPickerDates([dateKey]);
   };
 
-  const toggleDateSelected = (dateKey: string) => {
-    setSelectedDates((prev) => {
-      const next = new Set(prev);
-      if (next.has(dateKey)) {
-        next.delete(dateKey);
-      } else {
-        next.add(dateKey);
-      }
-      return next;
+  const handleSelectMealForDate = (meal: MealPlan) => {
+    if (!pickerDates || pickerDates.length === 0) return;
+    const dateKey = pickerDates[0];
+
+    setStagedMeals((prev) => ({
+      ...prev,
+      [dateKey]: meal,
+    }));
+
+    setPickerDates(null);
+  };
+
+  const handleClearStagedDate = (e: React.MouseEvent, dateKey: string) => {
+    e.stopPropagation();
+    setStagedMeals((prev) => {
+      const copy = { ...prev };
+      delete copy[dateKey];
+      return copy;
     });
   };
 
-  const handleCellClick = (day: number, locked: boolean) => {
-    if (locked) return;
-    const dateKey = dateKeyFor(day);
-
-    if (selectionMode) {
-      toggleDateSelected(dateKey);
-    } else {
-      setPickerSearch('');
-      setPickerDates([dateKey]);
-    }
-  };
-
-  const openBatchPicker = () => {
-    if (selectedDates.size === 0) return;
-    setPickerSearch('');
-    setPickerDates(Array.from(selectedDates).sort());
-  };
-
-  const handlePushMeal = async (meal: MealPlan) => {
-    if (!selectedClientId || !pickerDates || pickerDates.length === 0 || !meal.meal_id) return;
+  const handlePushBatch = async () => {
+    const datesToPush = Object.keys(stagedMeals);
+    if (!selectedClientId || datesToPush.length === 0) return;
 
     setIsPushing(true);
     setPushResult(null);
 
-    const results = await Promise.allSettled(
-      pickerDates.map((dateKey) =>
-        apiFetch<{ message: string }>('/api/operator/menu/assign', {
+    try {
+      const assignmentsPayload = Object.entries(stagedMeals).map(([dateKey, meal]) => ({
+        meal_id: meal.meal_id,
+        client_id: selectedClientId,
+        assignment_date: dateKey,
+        price_per_serving: Number(meal.price_per_serving) || 0.0,
+      }));
+
+      const data = await apiFetch<{ total: number; succeeded: number; failed: number; results: any[] }>(
+        '/api/operator/menu/assign/batch',
+        {
           method: 'POST',
-          body: JSON.stringify({
-            meal_id: meal.meal_id,
-            client_id: selectedClientId,
-            assignment_date: dateKey,
-            price_per_serving: Number(meal.price_per_serving) || 0.0,
-            status: 'Scheduled',
-          }),
-        })
-      )
-    );
+          body: JSON.stringify({ assignments: assignmentsPayload }),
+        }
+      );
 
-    const succeeded = results.filter((r) => r.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
+      const succeeded = data.succeeded || 0;
+      const failed = data.failed || 0;
 
-    setIsPushing(false);
-    setPickerDates(null);
-    setSelectionMode(false);
-    setSelectedDates(new Set());
-
-    setPushResult(
-      failed === 0
-        ? `Assigned "${meal.meal_name}" to ${succeeded} day${succeeded === 1 ? '' : 's'}.`
-        : `Assigned "${meal.meal_name}" to ${succeeded} day${succeeded === 1 ? '' : 's'}; ${failed} day${failed === 1 ? '' : 's'} could not be updated (likely already locked).`
-    );
-
-    if (selectedClientId) {
-      fetchClientAssignments(selectedClientId);
+      // remind operator of push rules- no week of changes
+      setPushResult(
+        failed === 0
+          ? `Successfully assigned ${succeeded} meal${succeeded === 1 ? '' : 's'}.`
+          : `Assigned ${succeeded} meal${succeeded === 1 ? '' : 's'}; ${failed} failed (likely locked or invalid).`
+      );
+    } catch (err) {
+      console.error('Batch push failed:', err);
+      setPushResult('A network or server error occurred while assigning the meals.');
+    } finally {
+      setIsPushing(false);
+      setStagedMeals({});
+      if (selectedClientId) {
+        fetchClientAssignments(selectedClientId);
+      }
     }
   };
 
@@ -1406,16 +1396,18 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
     return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
 
+  const stagedCount = Object.keys(stagedMeals).length;
+
   return (
     <AnimatedCalendarWrapper>
       <header className={styles.calendar_header}>
         <div className={styles.client_picker}>
           <label>Assigning for: </label>
-          <select 
-            value={selectedClientId || ''} 
+          <select
+            value={selectedClientId || ''}
             onChange={(e) => setSelectedClientId(Number(e.target.value))}
           >
-            <option> </option>
+            <option value="">-- Select Client --</option>
             {clients.map((c: any) => (
               <option key={c.client_id} value={c.client_id}>
                 {c.client_name || c.name}
@@ -1423,7 +1415,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
             ))}
           </select>
         </div>
-            
+
         <div className={styles.month_nav}>
           <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))}>
             &lt; Prev
@@ -1434,23 +1426,24 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
           </button>
         </div>
 
-        {/* batch push meals unimplemented */}
-        <button
-          type="button"
-          className={styles.batch_toggle_btn}
-          onClick={toggleSelectionMode}
-          disabled={!selectedClientId}
-          title={!selectedClientId ? 'Select a client first' : undefined}
-        >
-          {selectionMode ? 'Cancel Batch Select' : 'Batch Push Meals'}
-        </button>
+        {stagedCount > 0 && (
+          <button
+            type="button"
+            className={styles.batch_toggle_btn}
+            onClick={() => setStagedMeals({})}
+          >
+            Clear Staged ({stagedCount})
+          </button>
+        )}
       </header>
 
       <div className={styles.calendar_grid}>
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-          <div key={d} className={styles.day_label}>{d}</div>
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+          <div key={d} className={styles.day_label}>
+            {d}
+          </div>
         ))}
-            
+
         {[...Array(startDayOfMonth)].map((_, i) => (
           <div key={`pad-${i}`} className={styles.day_empty} />
         ))}
@@ -1460,28 +1453,38 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
           const dateKey = dateKeyFor(day);
 
           const safeAssignments = Array.isArray(assignments) ? assignments : [];
-          const backendMatch = safeAssignments.find(a => a?.assignment_date === dateKey);
-          const assignedMeal = backendMatch?.meal?.meal_name;
+          const backendMatch = safeAssignments.find((a) => a?.assignment_date === dateKey);
 
+          const stagedMeal = stagedMeals[dateKey];
+          const isStaged = !!stagedMeal;
+          const assignedMealName = stagedMeal ? stagedMeal.meal_name : backendMatch?.meal?.meal_name;
           const locked = isDateLocked(day);
-          const isSelected = selectionMode && selectedDates.has(dateKey);
 
           return (
-            <div 
-              key={day} 
-              className={`${styles.calendar_cell} ${locked ? styles.locked : ''} ${isSelected ? styles.calendar_cell_selected : ''}`}
+            <div
+              key={day}
+              className={`${styles.calendar_cell} ${locked ? styles.locked : ''} ${isStaged ? styles.calendar_cell_staged : ''}`}
               onClick={() => handleCellClick(day, locked)}
-            >                    
+            >
               <div className={styles.cell_header}>
                 <span className={styles.cell_date}>{day}</span>
                 <span className={locked ? styles.lock_icon : styles.add_icon}>
-                  {locked ? '🔒' : selectionMode ? (isSelected ? '✓' : '+') : '+'}
+                  {locked ? '🔒' : '+'}
                 </span>
               </div>
-              
-              {assignedMeal && (
-                <div className={styles.assignment_tag}>
-                  {assignedMeal}
+
+              {assignedMealName && (
+                <div className={`${styles.assignment_tag} ${isStaged ? styles.assignment_tag_staged : ''}`}>
+                  <span>{isStaged ? '' : ''}{assignedMealName}</span>
+                  {isStaged && (
+                    <button
+                      type="button"
+                      className={styles.clear_staged_btn}
+                      onClick={(e) => handleClearStagedDate(e, dateKey)}
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1489,16 +1492,19 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
         })}
       </div>
 
-      {selectionMode && (
+      {stagedCount > 0 && (
         <footer className={styles.batch_action_bar}>
-          <span>{selectedDates.size} day{selectedDates.size === 1 ? '' : 's'} selected</span>
+          <span className={styles.batch_info_text}>
+            <strong>{stagedCount}</strong> meal{stagedCount === 1 ? '' : 's'} staged for push
+          </span>
+
           <button
             type="button"
-            className={styles.push_active_btn}
-            onClick={openBatchPicker}
-            disabled={selectedDates.size === 0}
+            className={styles.push_batch_btn}
+            onClick={handlePushBatch}
+            disabled={isPushing}
           >
-            Choose Meal &amp; Push
+            {isPushing ? 'Pushing Batch...' : `Push Batch (${stagedCount})`}
           </button>
         </footer>
       )}
@@ -1506,7 +1512,9 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
       {pushResult && (
         <div className={styles.push_result_banner}>
           {pushResult}
-          <button type="button" onClick={() => setPushResult(null)}>x</button>
+          <button type="button" onClick={() => setPushResult(null)}>
+            x
+          </button>
         </div>
       )}
 
@@ -1515,9 +1523,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
           <div className={styles.modal_content} onClick={(e) => e.stopPropagation()}>
             <h3>Assign Meal</h3>
             <p className={styles.picker_subtitle}>
-              {pickerDates.length === 1
-                ? `Assigning to ${formatDateLabel(pickerDates[0])}`
-                : `Assigning to ${pickerDates.length} selected days: ${pickerDates.map(formatDateLabel).join(', ')}`}
+              Assigning to {formatDateLabel(pickerDates[0])}
             </p>
 
             <input
@@ -1537,7 +1543,7 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
                     type="button"
                     key={meal.meal_id}
                     className={styles.picker_meal_item}
-                    onClick={() => handlePushMeal(meal)}
+                    onClick={() => handleSelectMealForDate(meal)}
                     disabled={isPushing}
                   >
                     <span className={styles.picker_meal_name}>{meal.meal_name}</span>
@@ -1552,8 +1558,13 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
             </div>
 
             <div className={styles.modal_actions}>
-              <button type="button" className={styles.cancel_button} onClick={() => setPickerDates(null)} disabled={isPushing}>
-                {isPushing ? 'Pushing...' : 'Close'}
+              <button
+                type="button"
+                className={styles.cancel_button}
+                onClick={() => setPickerDates(null)}
+                disabled={isPushing}
+              >
+                Close
               </button>
             </div>
           </div>

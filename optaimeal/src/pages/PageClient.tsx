@@ -845,6 +845,7 @@ function ChatView({ assignments = [], selectedDay, onDaySelect, clientId, numStu
 }
 
 function CalendarView({ clientId, numStudents }: CalendarViewProps) {
+  
   type CalendarAssignments = Record<number, Record<string, string>>;
 
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
