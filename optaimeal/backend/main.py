@@ -5,14 +5,16 @@ from pydantic import BaseModel, ConfigDict, ValidationError, Field
 from datetime import date, datetime, timedelta
 import json
 import os
+import traceback
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
-from groq import Groq
 from typing import Dict, Any, List, Optional
 import models, database 
 import statemachine
 from statemachine import AssignmentStatus, MealStatus
 import analytics
+from google import genai
+from google.genai import types
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -21,14 +23,14 @@ app = FastAPI(title="OPTAIMEAL API")
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
     raise ValueError(
-        f"GROQ_API_KEY is missing! Looking at: {env_path}\n"
-        "Make sure the file contains: GROQ_API_KEY=gsk_your_key_here"
+        f"GEMINI_API_KEY is missing! Looking at: {env_path}\n"
+        "Make sure the file contains: GEMINI_API_KEY=your_key_here"
     )
 
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -359,6 +361,33 @@ class MenuAnalyticsResponse(BaseModel):
 # Helper Functionss
 # ==========================================
 
+def build_gemini_history_contents(chat_history, role_field: str = "role") -> list:
+    """
+    Converts a list of {role, content} chat turns into Gemini `Content`
+    objects, remapping "assistant" -> "model" (Gemini's role names differ
+    from the OpenAI/Groq-style convention the frontends were built around).
+
+    Gemini rejects a conversation whose first turn isn't role "user" - and
+    every chat surface in this app seeds its local history with a synthetic
+    greeting like "Start chat" / "Chat ready for {day}" from the assistant's
+    side, so the raw history's first entry is almost always role "model".
+    Rather than rely on every caller to know to strip that, any leading
+    non-user turns are dropped here before a fresh user turn is appended.
+    """
+    contents: list = []
+    for msg in chat_history or []:
+        role = "model" if getattr(msg, role_field, None) == "assistant" else "user"
+        text = getattr(msg, "content", None)
+        if not text:
+            continue
+        contents.append(types.Content(role=role, parts=[types.Part(text=text)]))
+
+    while contents and contents[0].role != "user":
+        contents.pop(0)
+
+    return contents
+
+
 def format_meal(meal: Any) -> dict:
     ingredients_list = []
 
@@ -432,21 +461,18 @@ You MUST respond with a valid JSON object strictly matching the following schema
 
         user_prompt = f"Please enrich the nutritional and market data for ingredient: '{ingredient.ingredient_name}'"
 
-        # Query Groq LLM using JSON mode
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.2,
+                response_mime_type="application/json",
+            ),
         )
 
-        response_text = completion.choices[0].message.content
-        parsed_json = json.loads(response_text)
+        parsed_json = json.loads(response.text)
 
-        # Validate with the predefined Pydantic schema
         enriched_data = IngredientEnrichmentPayload(**parsed_json)
 
         # Update base ingredient fields
@@ -1667,12 +1693,10 @@ def regenerate_meal_options(
         }} 
     """
 
-    messages = [{"role": "system", "content": system_prompt}]
-
-    # Format previous chat history
-    for msg in request.chat_history:
-        role = "assistant" if msg.role == "assistant" else "user"
-        messages.append({"role": role, "content": msg.content})
+    # Format previous chat history as Gemini `Content` turns (role must be
+    # "user" or "model" - Groq/OpenAI-style "assistant" isn't valid here,
+    # and the conversation must start on a "user" turn)
+    contents = build_gemini_history_contents(request.chat_history)
 
     # Append current context and constraints
     user_context = f"""
@@ -1683,36 +1707,41 @@ def regenerate_meal_options(
         Insufficient Ingredients to Reduce/Replace: {', '.join(request.insufficient_ingredients) or 'None'}
         User Request: {request.user_prompt or 'Generate alternative meal options based on constraints.'}
     """
-    messages.append({"role": "user", "content": user_context})
+    contents.append(types.Content(role="user", parts=[types.Part(text=user_context)]))
 
-    # Call Groq API with JSON mode
+    # Call Gemini API with JSON mode
     try:
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.7,
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.7,
+                response_mime_type="application/json",
+            ),
         )
 
-        response_text = completion.choices[0].message.content
-        parsed_data = json.loads(response_text)
+        parsed_data = json.loads(response.text)
 
         return RegenerateResponse(**parsed_data)
 
     except json.JSONDecodeError:
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Groq LLM returned malformed JSON string.",
+            detail="Gemini LLM returned malformed JSON string.",
         )
     except ValidationError as ve:
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"LLM JSON schema mismatch: {ve.errors()}",
         )
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Groq API Error: {str(e)}",
+            detail=f"Gemini API Error: {str(e)}",
         )
 
 # UNTESTED/UNIMPLEMENTED
@@ -1931,7 +1960,7 @@ def get_all_clients(db: Session = Depends(database.get_db)):
 
 #basic chat edpoint
 @app.post("/api/client/menu/chat")
-def chat_with_groq(
+def chat_with_gemini(
     request: ChatRequest, db: Session = Depends(database.get_db)
 ):
     # 1. Fetch current context (assigned meal for this day)
@@ -1959,19 +1988,19 @@ def chat_with_groq(
         "Provide concise, practical, and friendly answers to questions about ingredients, substitutions, or menu tweaks. "
     )
 
-    # Call Groq API
+    # Call Gemini API
     try:
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.message},
-            ],
-            temperature=0.7,
-            max_tokens=400,
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=request.message,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.7,
+                max_output_tokens=400,
+            ),
         )
 
-        response_text = completion.choices[0].message.content
+        response_text = response.text
 
         return {
             "response": response_text,
@@ -1979,9 +2008,10 @@ def chat_with_groq(
         }
 
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Groq API Error: {str(e)}",
+            detail=f"Gemini API Error: {str(e)}",
         )
 
 @app.post("/api/operator/menu/chat")
@@ -1997,24 +2027,26 @@ def operator_meal_generation_chat(
         "that work around the listed inventory constraints, and help tailor recipes for batch serving."
     )
 
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    if request.chat_history:
-        for msg in request.chat_history:
-            role = "assistant" if msg.role == "assistant" else "user"
-            messages.append({"role": role, "content": msg.content})
-
-    messages.append({"role": "user", "content": request.message})
+    # Same leading-role fix as regenerate_meal_options: the operator UI seeds
+    # its local chat history with a synthetic "Start chat" assistant message,
+    # so the raw history's first turn is role "model" - Gemini requires
+    # conversations to start on "user". build_gemini_history_contents()
+    # strips any such leading non-user turns before we append the new message.
+    contents = build_gemini_history_contents(request.chat_history)
+    contents.append(types.Content(role="user", parts=[types.Part(text=request.message)]))
 
     try:
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=400,
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.7,
+                max_output_tokens=400,
+            ),
         )
 
-        response_text = completion.choices[0].message.content
+        response_text = response.text
 
         return {
             "response": response_text,
@@ -2022,7 +2054,8 @@ def operator_meal_generation_chat(
         }
 
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Groq Chat API Error: {str(e)}",
+            detail=f"Gemini Chat API Error: {str(e)}",
         )
