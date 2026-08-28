@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Response, Backgroun
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel, ConfigDict, ValidationError, Field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json
 import os
 import traceback
@@ -923,7 +923,7 @@ def assign_menu_to_client(
                 history = list(log.change_history or [])
                 history.append(
                     {
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "action": "SWAP",
                         "previous_meal_id": previous_meal_id,
                         "new_meal_id": request.meal_id,
@@ -944,7 +944,7 @@ def assign_menu_to_client(
                 else [],
                 change_history=[
                     {
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "action": "OVERWRITE",
                         "previous_meal_id": previous_meal_id,
                         "new_meal_id": request.meal_id,
@@ -994,7 +994,7 @@ def assign_menu_to_client(
             old_meal_ids=[],
             change_history=[
                 {
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "action": "INITIAL_ASSIGNMENT",
                     "meal_id": request.meal_id,
                     "source": "OPERATOR_UPDATE",
@@ -1097,7 +1097,7 @@ def batch_assign_menu_to_clients(
 
     results: List[BatchAssignmentResultItem] = []
     touched_meal_ids: set = set()
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     for item in items:
         meal = meals_by_id.get(item.meal_id)
@@ -1879,7 +1879,7 @@ def apply_meal_selection(
     )
 
     history_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "action": "SWAP_SELECTION",
         "previous_meal_id": previous_meal_id,
         "new_meal_id": chosen_meal.meal_id,
@@ -2004,7 +2004,7 @@ def chat_with_gemini(
 
         return {
             "response": response_text,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     except Exception as e:
@@ -2050,7 +2050,7 @@ def operator_meal_generation_chat(
 
         return {
             "response": response_text,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     except Exception as e:
