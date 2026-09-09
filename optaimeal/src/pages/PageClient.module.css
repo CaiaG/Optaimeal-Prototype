@@ -634,12 +634,14 @@ CSS
   background: #f9f9f9;
   border-radius: 8px;
   max-width: 850px;
+  min-width: 0; 
 }
 
 .chat_wrapper {
   display: flex;
   gap: 20px;
   height: 100%;
+  min-width: 0;
 }
 
 .chat_header {
@@ -655,11 +657,16 @@ CSS
   flex-grow: 1;
   padding: 20px;
   overflow-y: auto;
+  overflow-x: hidden; 
+  width: 100%;       
+  min-width: 0;      
 }
 
 /* Container & Headers */
 .options_container {
   margin-bottom: 1.5rem;
+  width: 100%;
+  min-width: 0;
 }
 
 .options_title {
@@ -677,16 +684,21 @@ CSS
 .options_scroll_row {
   display: flex;
   flex-direction: row;
+  flex-wrap: nowrap;
   gap: 1rem;
   overflow-x: auto;
+  overflow-y: hidden;
+  width: 100%;      
+  max-width: 100%;
+  min-width: 0;     
   padding-bottom: 0.75rem;
   scrollbar-width: thin;
 }
 
-/* Meal Option Card */
 .option_card {
   flex: 0 0 280px;
-  min-height: 380px;
+  min-height: 280px;
+  max-height: 320px;
   min-width: 280px;
   max-width: 320px;
   display: flex;
@@ -697,6 +709,16 @@ CSS
   padding: 0.85rem;
   background-color: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
+  overflow-y: auto; 
+}
+
+.card_content_scrollable {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px; 
+  min-width: 0;
 }
 
 .option_card_adjusted {

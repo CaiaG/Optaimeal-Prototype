@@ -180,7 +180,6 @@ export const parseIngredients = (
     .filter((item): item is MealIngredient => item !== null);
 };
 
-// --- Meal & Ingredient Breakdown Types (GET /api/meal/{id}/breakdown) ---
 export interface MealIngredientBreakdown {
   ingredient_id: number;
   ingredient_name: string;

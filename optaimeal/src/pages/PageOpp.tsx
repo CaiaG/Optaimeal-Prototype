@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styles from './PageOpp.module.css';
 import { createEmptyMeal, type MealPlan, type Assignment, type Client, type MasterIngredient, 
-type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary, type MealBreakdownResponse, type MealBreakdownTotals, type MealIngredientBreakdown} from './types/frontendSchemas';
+type MealIngredient, type CreateIngredientPayload, type AnalyticsEntry, type AnalyticsResponse, type AnalyticsSummary, type MealBreakdownResponse, type MealBreakdownTotals, type MealIngredientBreakdown, type MealStatus} from './types/frontendSchemas';
 import { apiFetch } from '../services/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -26,6 +26,7 @@ interface GenerateViewProps {
   chatInput: string;
   setChatInput: React.Dispatch<React.SetStateAction<string>>;
   chatHistory: Array<{ sender: string; text: string }>;
+  setChatHistory: React.Dispatch<React.SetStateAction<Array<{ sender: string; text: string }>>>; // ADD THIS
   onSendMessage: () => void;
   onResetChat: () => void;
   onSaveDraft: () => Promise<void>;
@@ -47,10 +48,21 @@ interface CalendarViewProps {
   setSelectedClientId: React.Dispatch<React.SetStateAction<number | null>>;
 }
 
+interface EditIngredientModal {
+  ingredient: MasterIngredient;
+  onClose: () => void;
+  setAvailableIngredients: React.Dispatch<React.SetStateAction<MasterIngredient[]>>;
+}
+
 interface SavedViewProps {
   meals: MealPlan[];
-  onEdit: (meal: MealPlan) => void;
+  clients: Client[];
+  ingredients: MasterIngredient[];
+  onEditMeal: (meal: MealPlan) => void;
+  onEditIngredient: (ingredient: MasterIngredient) => void;
+  onEditClient: (client: Client) => void;
   onBack: () => void;
+  setAvailableIngredients: React.Dispatch<React.SetStateAction<MasterIngredient[]>>;
 }
 
 interface AnalyticsViewProps {
@@ -78,6 +90,7 @@ export default function PageOpp() {
 
   const [savedMealId, setSavedMealId] = useState<number | null>(null);
   const lastSavedPayloadRef = useRef<string | null>(null);
+  
   useEffect(() => {
     const loadInitialData = async () => {
       // 1. Fetch Meals
@@ -222,7 +235,7 @@ export default function PageOpp() {
 
   const handleResetChat = () => {
     if (!selectedMeal) return;
-    setChatHistory([{ sender: 'System', text: "Yo" }]);
+    setChatHistory([{ sender: 'System', text: "Hello!" }]);
     setChatInput('');
   };
 
@@ -564,6 +577,7 @@ export default function PageOpp() {
             chatInput={chatInput}
             setChatInput={setChatInput}
             chatHistory={chatHistory}
+            setChatHistory={setChatHistory}
             onSendMessage={handleSendMessage}
             onResetChat={handleResetChat}
             onSaveDraft={handleSaveAndUpdateFrontend}
@@ -588,8 +602,17 @@ export default function PageOpp() {
         {activeView === 'saved' && (
           <SavedView 
             meals={meals} 
-            onEdit={(m: MealPlan) => handleNavigation('generate', m)} 
+            clients={clients}
+            ingredients={availableIngredients}
+            onEditMeal={(m: MealPlan) => handleNavigation('generate', m)} 
+            onEditIngredient={(ing: MasterIngredient) => {
+              console.log('Edit ingredient:', ing);
+            }}
+            onEditClient={(client: Client) => {
+              console.log('Edit client:', client);
+            }}
             onBack={() => setActiveView('home')} 
+            setAvailableIngredients={setAvailableIngredients}
           />
         )}
         {activeView === 'analytics' && (
@@ -604,7 +627,6 @@ export default function PageOpp() {
 }
 
 // --- Sub-Components ---
-
 
 function HomeView({ 
   meals, onNavigate
@@ -693,17 +715,6 @@ function HomeView({
               onClick={() => !isDragging.current && onNavigate('generate', createEmptyMeal())}
             >
               Create from Scratch
-            </button>
-            <button 
-              className={styles.option_btn} 
-              onClick={() => { 
-                if (!isDragging.current) {
-                  onNavigate('saved', null); 
-                  setAddMode('button');
-                }
-              }}              
-            >
-              Load from Database
             </button>
             <button 
               className={styles.cancel_link} 
@@ -852,7 +863,7 @@ function HomeView({
 }
 
 function GenerateView({ 
-  meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId, clients, isLoadingClients, selectedClientId, setSelectedClientId, availableIngredients, onCreateNewIngredient
+  meal, onUpdateMeal, onBack, chatInput, setChatInput, chatHistory, onSendMessage, onResetChat, onSaveDraft, onAssignToClient, savedMealId, clients, isLoadingClients, selectedClientId, setSelectedClientId, availableIngredients, onCreateNewIngredient, setChatHistory
 }: GenerateViewProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -861,6 +872,119 @@ function GenerateView({
   const [unit, setUnit] = useState<string>('cups');
   const [isCreating, setIsCreating] = useState<boolean>(false);
 
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [candidateOptions, setCandidateOptions] = useState<any[]>([]);
+  
+  const handleGenerateMeal = async () => {
+    setIsGenerating(true);
+    const userText = chatInput.trim() || `Generate meal options based on "${meal?.meal_name || 'current conversation'}".`;
+
+    setChatHistory(prev => [...prev, { sender: 'User', text: userText }]);
+    setChatInput('');
+
+    try {
+      const chatContext = chatHistory.map((msg) => ({
+        role: msg.sender.toLowerCase() === 'user' ? 'user' : 'assistant',
+        content: msg.text,
+      }));
+
+      const payload = {
+        user_prompt: userText,
+        current_meal_name: meal?.meal_name,
+        ingredients: meal?.ingredients,
+        servings: 1,
+        unavailable_ingredients: [], 
+        insufficient_ingredients: [],
+        chat_history: chatContext,
+      };
+
+      const rawResponse = await apiFetch<any>('/api/operator/menu/generate-meal', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      const response = rawResponse?.data || rawResponse || {};
+
+      setChatHistory(prev => [
+        ...prev,
+        { sender: 'System', text: response.reply || 'Here are your generated options. Select one to apply it.' }
+      ]);
+
+      const primaryMeal = response.meal || response.edited_meal || response.assigned_meal;
+      const alternatives = Array.isArray(response.alternatives) ? response.alternatives : [];
+      const rawList = [];
+      
+      if (primaryMeal) rawList.push(primaryMeal);
+      rawList.push(...alternatives);
+
+      if (rawList.length > 0) {
+        setCandidateOptions(rawList);
+      }
+    } catch (err: any) {
+      setChatHistory(prev => [
+        ...prev,
+        { sender: 'System', text: `Error generating meal options: ${err.message}` }
+      ]);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleApplySelection = async (option: any) => {
+    try {
+      const payload = {
+        selected_meal: {
+          meal_name: option.meal_name || option.name || 'Generated Meal',
+          calories_per_serving: option.calories_per_serving || 0,
+          nutritional_score: option.nutritional_score || 0,
+          ingredients: option.ingredients || [],
+        },
+      };
+
+      // Call the backend route to register/save new ingredients into the database
+      const rawResponse = await apiFetch<any>('/api/operator/menu/apply-meal', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      const response = rawResponse?.data || rawResponse;
+      const processedIngredients = response.processed_ingredients || [];
+
+      // Construct the mapped meal object using the backend-verified ingredients (including database IDs if provided)
+      const populatedMeal: MealPlan = {
+        ...meal,
+        meal_id: meal?.meal_id ?? null,
+        status: meal?.status ?? 'Draft',
+        price_per_serving: meal?.price_per_serving ?? 0,
+        category: meal?.category ?? null,
+        assignment_date: meal?.assignment_date ?? '',
+        meal_name: option.meal_name || option.name || 'Generated Meal',
+        calories_per_serving: option.calories_per_serving || 0,
+        nutritional_score: option.nutritional_score || 0,
+        ingredients: processedIngredients.map((ing: any) => ({
+          ingredient_id: ing.ingredient_id,
+          ingredient_name: ing.ingredient_name,
+          ingredient_quantity: ing.ingredient_quantity,
+          unit: ing.unit,
+        })),
+      };
+
+      // Populate local editor fields and clear the candidate cards
+      onUpdateMeal(populatedMeal);
+      setCandidateOptions([]);
+      
+      setChatHistory(prev => [
+        ...prev,
+        { sender: 'System', text: `Loaded "${populatedMeal.meal_name}" into the editor and registered missing ingredients to the backend.` }
+      ]);
+    } catch (err: any) {
+      setChatHistory(prev => [
+        ...prev,
+        { sender: 'System', text: `Error registering ingredients: ${err.message}` }
+      ]);
+    }
+  };
+  
   const matchingIngredients = Array.isArray(availableIngredients)
     ? availableIngredients.filter((item) =>
         item.ingredient_name?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -1032,12 +1156,14 @@ function GenerateView({
                   style={{ flex: 1 }}
                 >
                   <option value="g">g</option>
-                  <option value="cups">cups</option>
-                  <option value="whole">whole</option>
+                  <option value="kg">kg</option>
+                  <option value="l">l</option>
                   <option value="ml">ml</option>
+                  <option value="whole">whole</option> 
                   <option value="tbsp">tbsp</option>
                   <option value="tsp">tsp</option>
                   <option value="slice">slice</option>
+                  
                 </select>
               </div>
 
@@ -1111,41 +1237,115 @@ function GenerateView({
           </header>
 
           <div className={styles.chatbot_interface}>
-            <div className={styles.chat_window}>
-              {chatHistory.map((msg: any, index: number) => (
-                <div key={index} className={msg.sender === 'System' ? styles.system_msg : styles.user_msg}>
-                  <div className={styles.msg_header}>
-                    <strong>{msg.sender}:</strong>
+
+            {/* Chat Window & Candidate Cards Loop */}
+          <div className={styles.chat_window}>
+            {chatHistory.map((msg: any, index: number) => {
+                const isUser = msg.sender.toLowerCase() === 'user';
+                return (
+                  <div 
+                    key={index} 
+                    className={isUser ? styles.user_msg_container : styles.system_msg_container}
+                  >
+                    <div className={styles.msg_header}>
+                      <strong>{msg.sender}</strong>
+                    </div>
+                    <div className={isUser ? styles.user_msg : styles.system_msg}>
+                      <ReactMarkdown>{msg.text}</ReactMarkdown>
+                    </div>
                   </div>
-                  <div className={styles.msg_body}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.text}
-                    </ReactMarkdown>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
-            <div className={styles.chat_input_box}>
-              <textarea 
-                placeholder="Type requirements here..." 
-                value={chatInput} 
-                onChange={(e) => setChatInput(e.target.value)} 
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    onSendMessage();
-                  }
-                }}
-              />
+            {candidateOptions.length > 0 && (
+              <section className={styles.options_container}>
+                <h4 className={styles.options_title}>Generated Options</h4>
+                <p className={styles.options_subtitle}>
+                  Review the options below and click "Apply" to load one into the editor:
+                </p>
+
+                <div className={styles.options_scroll_row}>
+                  {candidateOptions.map((option, idx) => {
+                    const ingredients = Array.isArray(option.ingredients) ? option.ingredients : [];
+                    return (
+                      <div key={idx} className={`${styles.option_card} ${option.adjusted ? styles.option_card_adjusted : ''}`}>
+                        {/* Scrollable inner content */}
+                        <div className={styles.card_content_scrollable}>
+                          <div className={styles.card_header}>
+                            <div className={styles.card_title}>{option.meal_name || option.name}</div>
+                          </div>
+
+                          <div className={styles.nutrition_info}>
+                            <strong>{option.calories_per_serving ?? 'N/A'}</strong> kcal &bull; 
+                            Score: <strong>{option.nutritional_score ?? 'N/A'}</strong>
+                          </div>
+
+                          {ingredients.length > 0 && (
+                            <div>
+                              <div className={styles.section_label}>Ingredients ({ingredients.length})</div>
+                              <div className={styles.ingredients_box}>
+                                <ul className={styles.ingredients_list}>
+                                  {ingredients.map((ing: any, i: number) => {
+                                    const isObj = typeof ing === 'object' && ing !== null;
+                                    const name = isObj ? (ing.ingredient_name || ing.name) : ing;
+                                    const rawQty = isObj ? (ing.ingredient_quantity ?? ing.quantity) : null;
+                                    const qty = rawQty !== null && rawQty !== undefined 
+                                      ? `${rawQty}${ing.unit && ing.unit !== 'unit' ? ' ' + ing.unit : ''}` 
+                                      : null;
+
+                                    return (
+                                      <li key={i} className={styles.ingredient_item}>
+                                        {name} {qty && <span className={styles.ingredient_quantity}>({qty})</span>}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <button
+                          type="button"
+                          onClick={() => handleApplySelection(option)}
+                          className={styles.select_button}
+                        >
+                          Apply This Meal
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+          {/* Action Buttons */}
+          <div className={styles.chat_input_box}>
+            <textarea 
+              placeholder="Type instructions or constraints here..." 
+              value={chatInput} 
+              onChange={(e) => setChatInput(e.target.value)} 
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  onSendMessage();
+                }
+              }}
+            />
+            <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
+              
               <button 
                 type="button"
                 className={styles.run_scenario_btn} 
-                onClick={onSendMessage}
+                onClick={handleGenerateMeal}
+                disabled={isGenerating}
+                style={{ flex: 1, backgroundColor: '#10b981' }}
               >
-                Run Optimization
+                {isGenerating ? 'Generating...' : 'Generate Options'}
               </button>
             </div>
+          </div>
           </div>
 
           <div className={styles.action_footer}>
@@ -1574,43 +1774,422 @@ function CalendarView({ meals, selectedClientId, clients, setSelectedClientId }:
   );
 }
 
-function SavedView({ meals, onEdit, onBack }: SavedViewProps) {
-  
+function EditIngredientModal({ 
+  ingredient, 
+  onClose, 
+  setAvailableIngredients,
+  isSaving = false
+}: { 
+  ingredient: MasterIngredient; 
+  onClose: () => void; 
+  setAvailableIngredients: React.Dispatch<React.SetStateAction<MasterIngredient[]>>;
+  isSaving?: boolean;
+}) {
+  const [name, setName] = useState(ingredient.ingredient_name || '');
+  const [category, setCategory] = useState(ingredient.category || 'Pantry');
+  const [price, setPrice] = useState(ingredient.price_per_unit?.toString() ?? '0');
+  const [unit, setUnit] = useState(ingredient.unit || 'unit');
+  const [location, setLocation] = useState(ingredient.location || 'Global');
+  const [season, setSeason] = useState(ingredient.season || 'Year-round');
+  const [availability, setAvailability] = useState(ingredient.availability || 'Available');
+  const [saving, setSaving] = useState(isSaving);
+  const [enriching, setEnriching] = useState(false);
+
+  const handleEnrich = async () => {
+    try {
+      setEnriching(true);
+      const enriched = await apiFetch<MasterIngredient>(`/api/ingredients/enrich/${ingredient.ingredient_id}`, {
+        method: 'POST',
+      });
+
+      // Update local state fields with the AI-enriched values
+      setName(enriched.ingredient_name || name);
+      setCategory(enriched.category || category);
+      setPrice(enriched.price_per_unit?.toString() ?? price);
+      setUnit(enriched.unit || unit);
+      setLocation(enriched.location || location);
+      setSeason(enriched.season || season);
+      setAvailability(enriched.availability || availability);
+
+      // Update parent list state
+      setAvailableIngredients(prev =>
+        prev.map(ing => (ing.ingredient_id === enriched.ingredient_id ? enriched : ing))
+      );
+    } catch (err) {
+      console.error('Error enriching ingredient:', err);
+      alert('Failed to enrich ingredient via AI.');
+    } finally {
+      setEnriching(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setSaving(true);
+      const payload = {
+        ingredient_name: name,
+        category,
+        price_per_unit: Number(price) || 0,
+        unit,
+        location,
+        season,
+        availability,
+      };
+
+      const saved = await apiFetch<MasterIngredient>(`/api/ingredients/${ingredient.ingredient_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      setAvailableIngredients(prev =>
+        prev.map(ing => (ing.ingredient_id === saved.ingredient_id ? saved : ing))
+      );
+      
+      onClose();
+    } catch (err) {
+      console.error('Error updating ingredient:', err);
+      alert('Failed to save ingredient changes.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isBusy = saving || enriching;
+
   return (
-    <div className={`${styles.saved_container} ${styles.animate_mount}`}>
-      <header className={styles.saved_header}>
-        <button className={styles.back_btn} onClick={onBack}>
-          Back to Dashboard
-        </button>
-        <h2>Saved Menu Drafts</h2>
-        <p>Manage your long-term meal plans here.</p>
-      </header>
+    <div className={styles.modal_overlay} onClick={() => !isBusy && onClose()}>
+      <div className={styles.modal_content} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>Edit Ingredient</h3>
+          <button
+            type="button"
+            className={styles.back_btn} // Or use a separate secondary button class if preferred
+            onClick={handleEnrich}
+            disabled={isBusy}
+            style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
+          >
+            {enriching ? 'Enriching...' : 'Auto-Enrich'}
+          </button>
+        </div>
+        <p className={styles.picker_subtitle}>
+          Modify catalog properties for {ingredient.ingredient_name}
+        </p>
 
-      <div className={styles.saved_list_controls}>
-        <input type="text" placeholder="Search saved meals..." className={styles.search_bar} />
-        <select className={styles.filter_dropdown}>
-          <option value="all">All States</option>
-          <option value="Draft">Drafts Only</option>
-          <option value="Active">Active Plans</option>
-        </select>
-      </div>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Ingredient Name</label>
+            <input
+              type="text"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={styles.picker_search_input}
+              disabled={isBusy}
+              required
+            />
+          </div>
 
-      <div className={styles.saved_grid}>
-        {meals.map((meal: MealPlan) => (
-          <div key={meal.meal_id} className={styles.saved_item_card}>
-            <div className={styles.card_header}>
-              <h3>{meal.meal_name}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Category</label>
+              <input
+                type="text"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className={styles.picker_search_input}
+                disabled={isBusy}
+              />
             </div>
-            <p><strong>{meal.calories_per_serving} kcal</strong> | {meal.status}</p>
-            <button 
-              className={styles.edit_btn} 
-              onClick={() => onEdit(meal)}
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Price ($)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                className={styles.picker_search_input}
+                disabled={isBusy}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Unit</label>
+              <input
+                type="text"
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+                className={styles.picker_search_input}
+                disabled={isBusy}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Location / Sourcing</label>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                className={styles.picker_search_input}
+                disabled={isBusy}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Season</label>
+              <input
+                type="text"
+                value={season}
+                onChange={(e) => setSeason(e.target.value)}
+                className={styles.picker_search_input}
+                disabled={isBusy}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.3rem', fontWeight: 500 }}>Availability State</label>
+              <input
+                type="text"
+                value={availability}
+                onChange={(e) => setAvailability(e.target.value)}
+                className={styles.picker_search_input}
+                disabled={isBusy}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              className={styles.back_btn}
+              onClick={onClose}
+              disabled={isBusy}
             >
-              Open & Edit
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className={styles.edit_btn}
+              disabled={isBusy}
+            >
+              {saving ? 'Saving Changes...' : 'Save Changes'}
             </button>
           </div>
-        ))}
+        </form>
       </div>
+    </div>
+  );
+}
+
+function SavedView({ meals, clients, ingredients, onEditMeal, onEditClient, onBack, onIngredientUpdated, setAvailableIngredients }: SavedViewProps & { onIngredientUpdated?: (updated: MasterIngredient) => void }) {
+  const [activeTab, setActiveTab] = useState<'meals' | 'ingredients' | 'clients'>('meals');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterState, setFilterState] = useState('all');
+
+  // Modal state for editing ingredients
+  const [editingIngredient, setEditingIngredient] = useState<MasterIngredient | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Filter logic for meals
+  const filteredMeals = meals.filter(meal => {
+    const matchesSearch = meal.meal_name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter = filterState === 'all' || meal.status?.toLowerCase() === filterState.toLowerCase();
+    return matchesSearch && matchesFilter;
+  });
+
+  // Filter logic for ingredients
+  const filteredIngredients = ingredients.filter(ing => {
+    const matchesSearch = ing.ingredient_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          (ing.category && ing.category.toLowerCase().includes(searchTerm.toLowerCase()));
+    return matchesSearch;
+  });
+
+  // Filter logic for clients
+  const filteredClients = clients.filter(client => {
+    const matchesSearch = client.client_name.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesSearch;
+  });
+
+  const handleSaveIngredient = async (updatedData: Partial<MasterIngredient>) => {
+    if (!editingIngredient) return;
+    try {
+      setIsSaving(true);
+      
+      const saved = await apiFetch<any>(`/api/ingredients/${editingIngredient.ingredient_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData)
+      });
+      
+      if (onIngredientUpdated) {
+        onIngredientUpdated(saved);
+      }
+      setEditingIngredient(null);
+    } catch (err) {
+      console.error('Error updating ingredient:', err);
+      alert('Failed to save ingredient changes.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className={`${styles.analytics_container} ${styles.animate_mount}`}>
+      <header className={styles.analytics_header}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <button className={styles.back_btn} onClick={onBack}>
+            &larr; Back to Dashboard
+          </button>
+        </div>
+        <h2>Catalog & Entity Management</h2>
+        <p>Manage your saved menu drafts, ingredient repository, and client profiles.</p>
+      </header>
+
+      {/* Tab Navigation Bar matching AnalyticsView */}
+      <div className={styles.analytics_tabs}>
+        <button 
+          className={`${styles.analytics_tab_btn} ${activeTab === 'meals' ? styles.active_tab : ''}`}
+          onClick={() => { setActiveTab('meals'); setSearchTerm(''); setFilterState('all'); }}
+        >
+          Saved Menu Drafts ({meals.length})
+        </button>
+        <button 
+          className={`${styles.analytics_tab_btn} ${activeTab === 'ingredients' ? styles.active_tab : ''}`}
+          onClick={() => { setActiveTab('ingredients'); setSearchTerm(''); setFilterState('all'); }}
+        >
+          Ingredients Repository ({ingredients.length})
+        </button>
+        <button 
+          className={`${styles.analytics_tab_btn} ${activeTab === 'clients' ? styles.active_tab : ''}`}
+          onClick={() => { setActiveTab('clients'); setSearchTerm(''); setFilterState('all'); }}
+        >
+          Clients Catalog ({clients.length})
+        </button>
+      </div>
+
+      {/* SEARCH AND CONTROLS BAR */}
+      <div className={styles.saved_list_controls} style={{ marginTop: '1.5rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem' }}>
+        <input 
+          type="text" 
+          placeholder={
+            activeTab === 'meals' ? "Search saved meals..." :
+            activeTab === 'ingredients' ? "Search ingredients or categories..." :
+            "Search clients by name..."
+          } 
+          className={styles.search_bar}
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{ flex: 1 }}
+        />
+        {activeTab === 'meals' && (
+          <select 
+            className={styles.filter_dropdown}
+            value={filterState}
+            onChange={(e) => setFilterState(e.target.value)}
+          >
+            <option value="all">All States</option>
+            <option value="Draft">Drafts Only</option>
+            <option value="Active">Active Plans</option>
+          </select>
+        )}
+      </div>
+
+      {/* TAB 1: SAVED MEALS */}
+      {activeTab === 'meals' && (
+        <div className={styles.saved_grid}>
+          {filteredMeals.length > 0 ? (
+            filteredMeals.map((meal: MealPlan) => (
+              <div key={meal.meal_id} className={styles.saved_item_card}>
+                <div className={styles.card_header}>
+                  <h3>{meal.meal_name}</h3>
+                </div>
+                <p><strong>{meal.calories_per_serving ? `${meal.calories_per_serving.toFixed(0)} kcal` : '—'}</strong> | {meal.status || 'Draft'}</p>
+                <button 
+                  className={styles.edit_btn} 
+                  onClick={() => onEditMeal(meal)}
+                >
+                  Open & Edit
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className={styles.analytics_empty} style={{ gridColumn: '1 / -1' }}>No saved meals match your search criteria.</div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: INGREDIENTS REPOSITORY */}
+      {activeTab === 'ingredients' && (
+        <div className={styles.saved_grid}>
+          {filteredIngredients.length > 0 ? (
+            filteredIngredients.map((ingredient: MasterIngredient) => (
+              <div key={ingredient.ingredient_id} className={styles.saved_item_card}>
+                <div className={styles.card_header}>
+                  <h3>{ingredient.ingredient_name}</h3>
+                </div>
+                <p>
+                  <strong>{ingredient.category || '--'}</strong> 
+                  {ingredient.price_per_unit !== undefined && ingredient.price_per_unit !== null 
+                    ? ` | $${Number(ingredient.price_per_unit).toFixed(2)} / ${ingredient.unit || 'unit'}` 
+                    : ''}
+                </p>
+                <p className={styles.analytics_muted} style={{ fontSize: '0.85rem' }}>
+                  Availability: {ingredient.availability || '--'} &bull; Season: {ingredient.season || 'Year-round'}
+                </p>
+                <button 
+                  className={styles.edit_btn} 
+                  onClick={() => setEditingIngredient(ingredient)}
+                >
+                  Edit Ingredient
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className={styles.analytics_empty} style={{ gridColumn: '1 / -1' }}>No ingredients found matching your search.</div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: CLIENTS CATALOG */}
+      {activeTab === 'clients' && (
+        <div className={styles.saved_grid}>
+          {filteredClients.length > 0 ? (
+            filteredClients.map((client: Client) => (
+              <div key={client.client_id} className={styles.saved_item_card}>
+                <div className={styles.card_header}>
+                  <h3>{client.client_name}</h3>
+                </div>
+                <p>
+                  <strong>Population Size:</strong> {client.population || 1} people
+                </p>
+                <p className={styles.analytics_muted} style={{ fontSize: '0.85rem' }}>
+                  Client ID: {client.client_id}
+                </p>
+                <button 
+                  className={styles.edit_btn} 
+                  onClick={() => onEditClient(client)}
+                >
+                  View & Edit Client Profile
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className={styles.analytics_empty} style={{ gridColumn: '1 / -1' }}>No clients found matching your search.</div>
+          )}
+        </div>
+      )}
+
+      {/* EDIT INGREDIENT MODAL POPUP */}
+      {editingIngredient && (
+        <EditIngredientModal
+          ingredient={editingIngredient}
+          onClose={() => setEditingIngredient(null)}
+          setAvailableIngredients={setAvailableIngredients}
+        />
+      )}
     </div>
   );
 }

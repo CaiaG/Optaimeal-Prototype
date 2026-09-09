@@ -1,5 +1,3 @@
-
-
 """
 analytics.py
 
@@ -75,9 +73,9 @@ def _surface_boundary_for(entry_dt: datetime) -> datetime:
 
 def is_surfaced(entry_timestamp: str, now: Optional[datetime] = None) -> bool:
     """
-    True if a change_history entry (ISO timestamp string, as written via
-    datetime.utcnow().isoformat() in main.py) should be visible to the
-    operator yet.
+    True if a change_history entry (an ISO timestamp string, written in
+    main.py via datetime.now(timezone.utc).isoformat() - UTC and
+    offset-aware) should be visible to the operator yet.
     """
     now = _local_now(now)
     try:
@@ -88,8 +86,12 @@ def is_surfaced(entry_timestamp: str, now: Optional[datetime] = None) -> bool:
         return True
 
     if entry_dt.tzinfo is None:
-        # Existing entries are written with datetime.utcnow().isoformat(),
-        # i.e. naive UTC - tag them as UTC before converting to local time.
+        # Backward compatibility: rows written before main.py switched from
+        # the deprecated, naive datetime.utcnow() to timezone-aware
+        # datetime.now(timezone.utc) have no offset in their stored string.
+        # Those are still UTC values, just missing the "+00:00" - tag them
+        # as UTC before converting to local time. New entries already carry
+        # their own offset and skip this branch entirely.
         from zoneinfo import ZoneInfo
         entry_dt = entry_dt.replace(tzinfo=ZoneInfo("UTC"))
 

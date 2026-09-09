@@ -3,18 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel, ConfigDict, ValidationError, Field
 from datetime import date, datetime, timedelta, timezone
-import json
-import os
-import traceback
+
+import json, os, traceback, models, database, statemachine, analytics, time, threading, logging
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 from typing import Dict, Any, List, Optional
-import models, database 
-import statemachine
 from statemachine import AssignmentStatus, MealStatus
-import analytics
+from pydantic import field_validator
 from google import genai
 from google.genai import types
+from database import SessionLocal
+
+from groq import Groq
+from google.genai.errors import ServerError
+
+logger = logging.getLogger(__name__)
 
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -30,7 +33,15 @@ if not GEMINI_API_KEY:
         "Make sure the file contains: GEMINI_API_KEY=your_key_here"
     )
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError(
+        f"GROQ_API_KEY is missing! Looking at: {env_path}\n"
+        "Make sure the file contains: GROQ_API_KEY=your_key_here"
+    )
+
 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +49,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# how to generate meal id
+
 class IngredientCreate(BaseModel):
     ingredient_name: str
     category: Optional[str] = "n/a"
@@ -53,6 +64,7 @@ class IngredientCreate(BaseModel):
 class IngredientOut(BaseModel):
     ingredient_id: int
     ingredient_name: str
+    category: Optional[str] = "Pantry"
     price_per_unit: Optional[float] = 0.0
     unit: Optional[str] = "unit"
     location: Optional[str] = None
@@ -63,6 +75,8 @@ class IngredientOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class NutritionProfileLLM(BaseModel):
+    serving_size: float = 100.0
+    serving_unit: str = "g"
     energy_kcal: float = 0.0
     protein_g: float = 0.0
     fat_g: float = 0.0
@@ -78,15 +92,35 @@ class NutritionProfileLLM(BaseModel):
     riboflavin_mg: float = 0.0
 
 class IngredientEnrichmentPayload(BaseModel):
-    category: str = Field(description="Produce, Meat, Dairy, Grain, Pantry, etc.")
-    price_per_unit: float = Field(description="Estimated USD price per standard unit")
-    unit: str = Field(description="e.g. kg, lb, oz, item, liter")
+    ingredient_name: Optional[str] = None
+    category: Optional[str] = Field(
+        default="Pantry", 
+        description="Produce, Meat, Dairy, Grain, Pantry, etc."
+    )
+    price_per_unit: float = Field(
+        default=0.0, 
+        description="Estimated USD price per standard unit"
+    )
+    unit: str = Field(
+        default="g", 
+        description="e.g. kg, lb, oz, item, liter"
+    )
     location: Optional[str] = "Global"
     season: Optional[str] = "Year-round"
     availability: Optional[str] = "High"
     substitutes: List[str] = []
-    nutrition: NutritionProfileLLM = Field(description="Nutritional estimates per 100g")
+    nutrition: Optional[NutritionProfileLLM] = Field(
+        default=None,
+        description="Nutritional estimates per 100g"
+    )
 
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, v: Optional[str]) -> str:
+        if not v or not v.strip() or v.lower() == "uncategorized":
+            return "Pantry"
+        return v.strip().title()
+    
 # ==========================================
 # Meal Ingredient Join Schemas
 # ==========================================
@@ -275,7 +309,7 @@ class ClientAssignmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 # ==========================================
-# Optimization Schemas
+# Optimization and Generation Schemas
 # ==========================================
 
 class ChatMessageSchema(BaseModel):
@@ -309,7 +343,7 @@ class ApplySelectionRequest(BaseModel):
     selected_meal: dict
 
 class ChatMessagePayload(BaseModel):
-    role: str  # 'user' or 'assistant'
+    role: str
     content: str
 
 class OperatorChatRequest(BaseModel):
@@ -320,6 +354,29 @@ class OperatorChatRequest(BaseModel):
     insufficient_ingredients: Optional[List[str]] = []
     message: str
     chat_history: Optional[List[ChatMessagePayload]] = []
+
+
+class OperatorGenerateRequest(BaseModel):
+    user_prompt: str
+    servings: int = 1
+    unavailable_ingredients: List[str] = []
+    insufficient_ingredients: List[str] = []
+    current_meal_name: Optional[str] = None
+    ingredients: Optional[List[Dict[str, Any]]] = None
+    chat_history: Optional[List[ChatMessageSchema]] = []
+
+class OperatorGenerateResponse(BaseModel):
+    reply: str
+    meal: Dict[str, Any]
+    alternatives: List[Dict[str, Any]] = []
+
+
+class OperatorApplyRequest(BaseModel):
+    selected_meal: Dict[str, Any]
+
+class OperatorApplyResponse(BaseModel):
+    message: str
+    processed_ingredients: List[Dict[str, Any]]
 
 # ==========================================
 # Analytics Schemas
@@ -362,18 +419,6 @@ class MenuAnalyticsResponse(BaseModel):
 # ==========================================
 
 def build_gemini_history_contents(chat_history, role_field: str = "role") -> list:
-    """
-    Converts a list of {role, content} chat turns into Gemini `Content`
-    objects, remapping "assistant" -> "model" (Gemini's role names differ
-    from the OpenAI/Groq-style convention the frontends were built around).
-
-    Gemini rejects a conversation whose first turn isn't role "user" - and
-    every chat surface in this app seeds its local history with a synthetic
-    greeting like "Start chat" / "Chat ready for {day}" from the assistant's
-    side, so the raw history's first entry is almost always role "model".
-    Rather than rely on every caller to know to strip that, any leading
-    non-user turns are dropped here before a fresh user turn is appended.
-    """
     contents: list = []
     for msg in chat_history or []:
         role = "model" if getattr(msg, role_field, None) == "assistant" else "user"
@@ -386,7 +431,6 @@ def build_gemini_history_contents(chat_history, role_field: str = "role") -> lis
         contents.pop(0)
 
     return contents
-
 
 def format_meal(meal: Any) -> dict:
     ingredients_list = []
@@ -415,8 +459,150 @@ def format_meal(meal: Any) -> dict:
         "updated_at": getattr(meal, "updated_at", None),
     }
 
-def enrich_ingredient_in_background(ingredient_id: int, db_session_factory):
-    """Fills in missing base fields AND attaches nutrition profile in a single task. Also will update if fields already exist"""
+def call_llm_with_fallback(system_prompt: str, user_prompt: str, response_schema):
+    """
+    Tries Groq first (lightning fast, free tier friendly, zero 503 bottlenecks).
+    Falls back to Gemini Flash if Groq errors out.
+    """
+    # Try Groq 
+    try:
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": system_prompt + "\n\nYou MUST respond ONLY with valid JSON matching this schema: " + json.dumps(response_schema.model_json_schema())},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+        return completion.choices[0].message.content
+    except Exception as groq_err:
+        print(f"Groq invocation failed, falling back to Gemini: {groq_err}")
+
+    # 2. Fallback to Gemini 3.6 Flash (Free tier resilient model)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                ),
+            )
+            return response.text
+        except Exception as gemini_err:
+            if attempt == max_retries - 1:
+                raise gemini_err
+            time.sleep(2 ** attempt)
+            
+    raise Exception("All LLM providers failed to generate content.")
+def enrich_ingredient_sync(ingredient_id: int, db: Session):
+    """Fills in missing base fields AND attaches nutrition profile using Groq with Gemini backup synchronously."""
+    ingredient = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ingredient_id).first()
+    if not ingredient:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Ingredient with ID {ingredient_id} not found."
+        )
+
+    try:
+        system_prompt = """
+            You are an expert culinary, nutritional, and financial database enrichment assistant. 
+            Given an ingredient name, estimate its default category, price in USD, standard unit of measurement, general sourcing location, seasonality, availability, potential culinary substitutes, and estimated nutritional values per 100g (or 100ml for liquids).
+
+            CRITICAL RULES FOR PRICING:
+            - "price_per_unit" MUST reflect the cost per standard bulk unit (e.g., price per 1 lb for meats/produce, price per 1 kg, or price per 1 liter), NOT the cost of an entire custom package or recipe portion. For example, a salmon fillet should be priced per lb (e.g., ~10.00 to 14.00 per lb), so that recipe calculations can scale down correctly.
+            - "unit" must explicitly match your pricing scale (e.g., "lb", "kg", "liter", "unit").
+
+            RULES FOR NUTRITION (per 100g or 100ml baseline):
+            - "serving_size": Must always be 100.
+            - "serving_unit": MUST be strictly either "g" or "ml".
+            - For protein sources like fish, poultry, or meat, ensure protein values reflect cooked or raw standard USDA baselines (e.g., raw salmon is ~20g protein per 100g; cooked is ~22-26g). Never output trace protein amounts like 1.4g for animal proteins.
+
+            ### Strict Unit & Pricing Standardization: ###
+            1. `unit` and `nutrition.serving_unit` MUST be strictly restricted to one of these exact strings: 
+            `"g"`, `"kg"`, `"ml"`, `"l"`, `"tbsp"`, `"tsp"`, or `"unit"`. Never invent custom units (e.g., avoid "oz", "cup", or "pinch" unless converted).
+            2. `price_per_unit` MUST represent the total cost for exactly **one** base unit of whatever is declared in `unit` (e.g., the cost for 1 kg if unit is `"kg"`,
+            1 liter if unit is `"l"`, or 1 individual item if unit is `"unit"`), never a custom recipe portion or arbitrary package size.
+
+            You MUST respond with a valid JSON object strictly matching the following schema with no extra text or markdown formatting outside the JSON:
+            {
+                "category": "Protein",
+                "price_per_unit": 12.50,
+                "unit": "kg",
+                "location": "Global",
+                "season": "Year-round",
+                "availability": "High",
+                "substitutes": ["substitute 1", "substitute 2"],
+                "nutrition": {
+                    "serving_size": 100, 
+                    "serving_unit": "g",  
+                    "energy_kcal": 206.0,
+                    "protein_g": 22.1,
+                    "fat_g": 12.3,
+                    "carb_g": 0.0,
+                    "fibre_g": 0.0,
+                    "vitamin_a_mcg": 50.0,
+                    "vitamin_c_mg": 0.0,
+                    "vitamin_b6_mg": 0.6,
+                    "vitamin_b12_mcg": 3.2,
+                    "iron_mg": 0.5,
+                    "zinc_mg": 0.4,
+                    "thiamin_mg": 0.2,
+                    "riboflavin_mg": 0.15
+                }
+            }
+            """
+        user_prompt = f"Please enrich the nutritional and market data for ingredient: '{ingredient.ingredient_name}'"
+
+        raw_json_text = call_llm_with_fallback(system_prompt, user_prompt, IngredientEnrichmentPayload)
+
+        parsed_json = json.loads(raw_json_text)
+        enriched_data = IngredientEnrichmentPayload(**parsed_json)
+
+        # Update base ingredient fields
+        ingredient.category = enriched_data.category
+        ingredient.price_per_unit = enriched_data.price_per_unit
+        ingredient.unit = enriched_data.unit
+        ingredient.location = enriched_data.location
+        ingredient.season = enriched_data.season
+        ingredient.availability = enriched_data.availability
+        ingredient.substitutes = enriched_data.substitutes
+
+        # Add or update the nutritional record (100g standard)
+        if enriched_data.nutrition:
+            nutrition_dict = (
+                enriched_data.nutrition.model_dump()
+                if hasattr(enriched_data.nutrition, "model_dump")
+                else enriched_data.nutrition.dict()
+            )
+
+            if not ingredient.nutrition:
+                nutrition_row = models.IngredientNutrition(
+                    ingredient_id=ingredient.ingredient_id,
+                    **nutrition_dict
+                )
+                db.add(nutrition_row)
+            else:
+                for key, val in nutrition_dict.items():
+                    setattr(ingredient.nutrition, key, val)
+
+        db.commit()
+        db.refresh(ingredient)
+        print(f"Successfully enriched ingredient synchronously: {ingredient.ingredient_name}")
+        return ingredient
+    except Exception as e:
+        db.rollback()
+        print(f"ERROR enriching ingredient ID {ingredient_id}: {e}")
+        traceback.print_exc()
+        raise e
+    
+def enrich_ingredient_in_background(ingredient_id: int, db_session_factory=database.SessionLocal):
+    """Fills in missing base fields AND attaches nutrition profile using Groq with Gemini backup."""
     db = db_session_factory()
     try:
         ingredient = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ingredient_id).first()
@@ -424,55 +610,58 @@ def enrich_ingredient_in_background(ingredient_id: int, db_session_factory):
             return
 
         system_prompt = """
-You are an expert culinary and nutritional database enrichment assistant.
-Given an ingredient name, estimate its default category, price per unit in USD, standard unit of measurement, general sourcing location, seasonality, availability, potential culinary substitutes, and estimated nutritional values per 100g or 100ml if the ingredient is a liquid.
-Rules for "nutrition":
-- "serving_size": Numeric value from which nutritional values are based off (default is usually 100).
-- "serving_unit": Standard unit, MUST be strictly either "g" or "ml".
+            You are an expert culinary, nutritional, and financial database enrichment assistant. 
+            Given an ingredient name, estimate its default category, price in USD, standard unit of measurement, general sourcing location, seasonality, availability, potential culinary substitutes, and estimated nutritional values per 100g (or 100ml for liquids).
 
-You MUST respond with a valid JSON object strictly matching the following schema:
-{
-    "category": "Produce",
-    "price_per_unit": 1.50,
-    "unit": "lb",
-    "location": "Global",
-    "season": "Year-round",
-    "availability": "High",
-    "substitutes": ["substitute 1", "substitute 2"],
-    "nutrition": {
-        "serving_size": 100, 
-        "serving_unit": "g",  
-        "energy_kcal": 52.0,
-        "protein_g": 0.3,
-        "fat_g": 0.2,
-        "carb_g": 13.8,
-        "fibre_g": 2.4,
-        "vitamin_a_mcg": 3.0,
-        "vitamin_c_mg": 4.6,
-        "vitamin_b6_mg": 0.04,
-        "vitamin_b12_mcg": 0.0,
-        "iron_mg": 0.12,
-        "zinc_mg": 0.04,
-        "thiamin_mg": 0.02,
-        "riboflavin_mg": 0.03
-    }
-}
-"""
+            CRITICAL RULES FOR PRICING:
+            - "price_per_unit" MUST reflect the cost per standard bulk unit (e.g., price per 1 lb for meats/produce, price per 1 kg, or price per 1 liter), NOT the cost of an entire custom package or recipe portion. For example, a salmon fillet should be priced per lb (e.g., ~10.00 to 14.00 per lb), so that recipe calculations can scale down correctly.
+            - "unit" must explicitly match your pricing scale (e.g., "lb", "kg", "liter", "unit").
 
+            RULES FOR NUTRITION (per 100g or 100ml baseline):
+            - "serving_size": Must always be 100.
+            - "serving_unit": MUST be strictly either "g" or "ml".
+            - For protein sources like fish, poultry, or meat, ensure protein values reflect cooked or raw standard USDA baselines (e.g., raw salmon is ~20g protein per 100g; cooked is ~22-26g). Never output trace protein amounts like 1.4g for animal proteins.
+
+            ### Strict Unit & Pricing Standardization: ###
+            1. `unit` and `nutrition.serving_unit` MUST be strictly restricted to one of these exact strings: 
+            `"g"`, `"kg"`, `"ml"`, `"l"`, `"tbsp"`, `"tsp"`, or `"unit"`. Never invent custom units (e.g., avoid "oz", "cup", or "pinch" unless converted).
+            2. `price_per_unit` MUST represent the total cost for exactly **one** base unit of whatever is declared in `unit` (e.g., the cost for 1 kg if unit is `"kg"`,
+            1 liter if unit is `"l"`, or 1 individual item if unit is `"unit"`), never a custom recipe portion or arbitrary package size.
+
+            You MUST respond with a valid JSON object strictly matching the following schema with no extra text or markdown formatting outside the JSON:
+            {
+                "category": "Protein",
+                "price_per_unit": 12.50,
+                "unit": "lb",
+                "location": "Global",
+                "season": "Year-round",
+                "availability": "High",
+                "substitutes": ["substitute 1", "substitute 2"],
+                "nutrition": {
+                    "serving_size": 100, 
+                    "serving_unit": "g",  
+                    "energy_kcal": 206.0,
+                    "protein_g": 22.1,
+                    "fat_g": 12.3,
+                    "carb_g": 0.0,
+                    "fibre_g": 0.0,
+                    "vitamin_a_mcg": 50.0,
+                    "vitamin_c_mg": 0.0,
+                    "vitamin_b6_mg": 0.6,
+                    "vitamin_b12_mcg": 3.2,
+                    "iron_mg": 0.5,
+                    "zinc_mg": 0.4,
+                    "thiamin_mg": 0.2,
+                    "riboflavin_mg": 0.15
+                }
+            }
+            """
         user_prompt = f"Please enrich the nutritional and market data for ingredient: '{ingredient.ingredient_name}'"
 
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.2,
-                response_mime_type="application/json",
-            ),
-        )
+        # Execute dual-provider resilient call
+        raw_json_text = call_llm_with_fallback(system_prompt, user_prompt, IngredientEnrichmentPayload)
 
-        parsed_json = json.loads(response.text)
-
+        parsed_json = json.loads(raw_json_text)
         enriched_data = IngredientEnrichmentPayload(**parsed_json)
 
         # Update base ingredient fields
@@ -502,17 +691,28 @@ You MUST respond with a valid JSON object strictly matching the following schema
                 setattr(ingredient.nutrition, key, val)
 
         db.commit()
+        print(f"Successfully enriched ingredient via fallback handler: {ingredient.ingredient_name}")
     except Exception as e:
         db.rollback()
-        print(f"Error enriching ingredient {ingredient_id}: {e}")
+        print(f"ERROR enriching ingredient ID {ingredient_id}: {e}")
+        traceback.print_exc()
+        
+        # Update the ingredient record in a fresh transaction to flag the failure
+        try:
+            failed_ingredient = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ingredient_id).first()
+            if failed_ingredient:
+                failed_ingredient.availability = "Enrichment Failed"
+                db.commit()
+                print(f"Marked ingredient ID {ingredient_id} as 'Enrichment Failed' in database.")
+        except Exception as db_err:
+            db.rollback()
+            print(f"Failed to update error state for ingredient {ingredient_id}: {db_err}")
     finally:
         db.close()
 
 def calculate_meal_cost(ingredients_data, db) -> float:
-    """Calculates total meal cost based on ingredient prices and quantities."""
     total_cost = 0.0
     for item in ingredients_data:
-        # Handle both Pydantic models/dicts and database objects
         ing_id = getattr(item, "ingredient_id", None) or (item.get("ingredient_id") if isinstance(item, dict) else None)
         qty = getattr(item, "ingredient_quantity", 1.0) or (item.get("ingredient_quantity") if isinstance(item, dict) else 1.0)
         qty = float(qty) if qty is not None else 1.0
@@ -523,6 +723,53 @@ def calculate_meal_cost(ingredients_data, db) -> float:
                 total_cost += float(db_ing.price_per_unit) * qty
                 
     return round(total_cost, 2)
+
+def call_chat_with_fallback(system_prompt: str, history: list, user_message: str):
+    """
+    Handles chat messaging with Groq first,
+    falling back to Gemini 3.6 Flash if Groq fails.
+    """
+    # Build conversation messages for Groq format
+    groq_messages = [{"role": "system", "content": system_prompt}]
+    for content in history:
+        role = "assistant" if content.role == "model" else "user"
+        text_part = "".join([p.text for p in content.parts if hasattr(p, "text")])
+        groq_messages.append({"role": role, "content": text_part})
+    groq_messages.append({"role": "user", "content": user_message})
+
+    # 1. Try Groq chat
+    try:
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=groq_messages,
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        return completion.choices[0].message.content
+    except Exception as groq_err:
+        print(f"Groq chat failed, falling back to Gemini: {groq_err}")
+
+    # 2. Fallback to Gemini 3.6 Flash chat
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            chat = gemini_client.chats.create(
+                model="gemini-3.6-flash",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.7,
+                    max_output_tokens=2048,
+                ),
+                history=history
+            )
+            response = chat.send_message(user_message)
+            return response.text
+        except Exception as gemini_err:
+            if attempt == max_retries - 1:
+                raise gemini_err
+            time.sleep(2 ** attempt)
+
+    raise Exception("All LLM providers failed to complete chat request.")
 
 # ==========================================
 # Logging Schemas
@@ -565,7 +812,6 @@ def read_root():
 # Operator Routes
 # ==========================================
 
-# Get meal details given meal id
 @app.get("/api/meal/{meal_id}", response_model=MealOut)
 def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
     meal = (
@@ -587,7 +833,6 @@ def get_meal_details(meal_id: int, db: Session = Depends(database.get_db)):
 
     return format_meal(meal)
 
-# Get cost + nutrition breakdown for a meal (per-ingredient and totals)
 @app.get("/api/meal/{meal_id}/breakdown", response_model=MealBreakdownResponse)
 def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
     meal = (
@@ -611,6 +856,21 @@ def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
     total_cost = 0.0
     ingredient_breakdowns: List[MealIngredientBreakdown] = []
 
+    def convert_to_base(val: float, u: str) -> tuple[float, str]:
+        """Normalize weights and volumes to base units (grams or milliliters)."""
+        u_clean = u.lower().strip()
+        if u_clean == "kg":
+            return val * 1000.0, "g"
+        elif u_clean == "l":
+            return val * 1000.0, "ml"
+        elif u_clean == "tbsp":
+            return val * 15.0, "ml"
+        elif u_clean == "tsp":
+            return val * 5.0, "ml"
+        elif u_clean in ["g", "ml", "unit"]:
+            return val, u_clean
+        return val, u_clean
+
     for mi in meal.meal_ingredients:
         ing = mi.ingredient
         quantity = mi.ingredient_quantity or 0.0
@@ -628,9 +888,18 @@ def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
             continue
 
         price_per_unit = ing.price_per_unit or 0.0
-        # Simplifying assumption: ingredient_quantity is entered in the same
-        # unit the ingredient is priced in, so cost scales linearly with it.
-        cost_contribution = round(price_per_unit * quantity, 4)
+        ing_unit = ing.unit or "unit"
+
+        # Normalize recipe quantity and ingredient pricing unit to a common base
+        recipe_qty_base, recipe_base_unit = convert_to_base(quantity, unit)
+        ing_unit_base_qty, ing_base_unit = convert_to_base(1.0, ing_unit)
+
+        # Correct cost calculation by scaling bulk prices (e.g. per kg/l) down to recipe quantities (e.g. g/ml)
+        if ing_base_unit == recipe_base_unit and ing_base_unit != "unit":
+            cost_contribution = round((price_per_unit / ing_unit_base_qty) * recipe_qty_base, 4)
+        else:
+            cost_contribution = round(price_per_unit * quantity, 4)
+
         total_cost += cost_contribution
 
         macros: Dict[str, float] = {}
@@ -639,11 +908,13 @@ def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
 
         if has_nutrition:
             serving_size = ing.nutrition.serving_size or 100.0
-            # Nutrition values are stored per `serving_size` (default 100g/ml).
-            # Simplifying assumption: ingredient_quantity/unit on the meal is
-            # expressed in the same base unit as serving_unit, so we scale
-            # linearly by ratio rather than attempting unit conversion.
-            scale = (quantity / serving_size) if serving_size else 0.0
+            serving_unit = (ing.nutrition.serving_unit or "g").lower().strip()
+            
+            # Scale nutrition accurately when base units match
+            if serving_unit == recipe_base_unit:
+                scale = (recipe_qty_base / serving_size) if serving_size else 0.0
+            else:
+                scale = (quantity / serving_size) if serving_size else 0.0
 
             for field in MACRO_FIELDS:
                 val = round(getattr(ing.nutrition, field, 0.0) * scale, 3)
@@ -688,8 +959,7 @@ def get_meal_breakdown(meal_id: int, db: Session = Depends(database.get_db)):
         totals=totals_out,
     )
 
-
-# Update meal details given meal id
+#  updare existing meal
 @app.put("/api/meal/{meal_id}", response_model=MealOut)
 def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(database.get_db)):
     existing_meal = (
@@ -710,18 +980,24 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
             detail="Archived meals are locked and cannot be edited."
         )
 
-    # STATE MACHINE
     if not statemachine.can_edit_meal_in_place(existing_meal):
+
+        child_count = db.query(models.Meal).filter(models.Meal.parent_meal_id == existing_meal.meal_id).count()
+        version_num = child_count + 2  
+        
+        base_name = existing_meal.meal_name.split(" (v")[0].split(" v")[0].strip()
+        new_fork_name = f"{base_name} v{version_num}"
+
         forked = statemachine.fork_meal(
             db,
-            meal_name=meal_data.meal_name,
+            meal_name=new_fork_name,
             calories_per_serving=meal_data.calories_per_serving,
             nutritional_score=meal_data.nutritional_score,
             price_per_serving=meal_data.price_per_serving,
             ingredients=[item.model_dump() for item in meal_data.ingredients],
             parent_meal_id=existing_meal.meal_id,
         )
- 
+        # forked meal should say V2 or something
         db.add(
             models.ChangeLog(
                 meal_id=existing_meal.meal_id,
@@ -791,7 +1067,6 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
             if db_ing and db_ing.price_per_unit:
                 total_calculated_cost += float(db_ing.price_per_unit) * qty
 
-    # Fallback to calculated cost if price is 0
     if not existing_meal.price_per_serving or existing_meal.price_per_serving == 0.0:
         existing_meal.price_per_serving = round(total_calculated_cost, 2)
 
@@ -825,7 +1100,6 @@ def update_meal(meal_id: int, meal_data: MealCreate, db: Session = Depends(datab
 def assign_menu_to_client(
     request: MenuAssignmentRequest, db: Session = Depends(database.get_db)
 ):
-    # ADDED joinedload to ensure we can calculate ingredient cost if needed
     meal = (
         db.query(models.Meal)
         .options(
@@ -871,7 +1145,6 @@ def assign_menu_to_client(
 
     was_overwritten = False
     
-    # PRICE RESOLUTION LOGIC
     assigned_price = request.price_per_serving if request.price_per_serving else (meal.price_per_serving or 0.0)
     
     if assigned_price == 0.0:
@@ -896,7 +1169,6 @@ def assign_menu_to_client(
 
         previous_meal_id = existing_assignment.meal_id
 
-        # Update existing record
         existing_assignment.meal_id = request.meal_id
         existing_assignment.status = assigned_status
         existing_assignment.price_per_serving = assigned_price
@@ -904,7 +1176,6 @@ def assign_menu_to_client(
 
         db.flush()
 
-        # Update or create the corresponding assignment audit log
         log = (
             db.query(models.MealAssignmentLog)
             .filter(
@@ -1011,7 +1282,7 @@ def assign_menu_to_client(
     date_str = request.assignment_date.isoformat()
 
     if was_overwritten:
-        msg = f"Notice: Overwrote existing assignment for {client.client_name} on {date_str}. '{meal.meal_name}' is now active."
+        msg = f"Notice: Overwrote existing assignment for {client.client_name} on {date_str}. '{meal.meal_name}' is now scheduled."
     else:
         msg = f"Meal '{meal.meal_name}' successfully assigned to '{client.client_name}' for {date_str}."
 
@@ -1027,16 +1298,6 @@ def assign_menu_to_client(
 def batch_assign_menu_to_clients(
     request: BatchAssignmentRequest, db: Session = Depends(database.get_db)
 ):
-    """
-    Push many (client, date) -> meal assignments in a single request.
-
-    This backs the operator calendar's "batch push" flow: instead of firing
-    one HTTP round trip + several DB queries per selected day (which is what
-    looping calls to /api/operator/menu/assign does), everything needed is
-    bulk-fetched up front in a constant number of queries, the whole batch
-    is applied in-memory, and the result is written back in ONE commit -
-    so pushing 20 days costs roughly the same number of queries as pushing 2.
-    """
     items = request.assignments
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No assignments provided")
@@ -1046,8 +1307,6 @@ def batch_assign_menu_to_clients(
             detail="Batch too large; split into requests of 500 assignments or fewer",
         )
 
-    # Bulk-fetch everything the batch could possibly touch (fixed
-    # number of queries, independent of len(items)) 
     meal_ids = {i.meal_id for i in items}
     client_ids = {i.client_id for i in items}
     assignment_dates = {i.assignment_date for i in items}
@@ -1069,9 +1328,6 @@ def batch_assign_menu_to_clients(
         for c in db.query(models.Client).filter(models.Client.client_id.in_(client_ids)).all()
     }
 
-    # Superset fetch (all rows for these clients on these dates), then match
-    # exact (client_id, assignment_date) pairs in Python - avoids relying on
-    # composite tuple_().in_() support, which isn't consistent across DBs.
     existing_by_key: Dict[tuple, models.MealAssignment] = {}
     if client_ids and assignment_dates:
         candidate_rows = (
@@ -1215,9 +1471,7 @@ def batch_assign_menu_to_clients(
                 price_per_serving=assigned_price,
             )
             db.add(new_assignment)
-            db.flush()  # need the new id, and register it below so a duplicate
-                        # (client, date) later in the same batch updates instead
-                        # of violating the unique constraint
+            db.flush() 
 
             new_log = models.MealAssignmentLog(
                 assignment_id=new_assignment.id,
@@ -1252,7 +1506,6 @@ def batch_assign_menu_to_clients(
             price_per_serving=assigned_price,
         ))
 
-    # Sync each touched meal's Draft/Active status once, not once per row
     for mid in touched_meal_ids:
         m = meals_by_id.get(mid)
         if m:
@@ -1269,7 +1522,6 @@ def batch_assign_menu_to_clients(
     )
 
 
-# Access accumulated reports of client changes
 @app.get("/api/operator/menu/analytics")
 def get_menu_analytics(
     client_id: Optional[int] = None,
@@ -1289,17 +1541,20 @@ def get_menu_analytics(
         db, client_id=client_id, start_date=start_date, end_date=end_date
     )
 
-
-# ==========================================
-# Ingredient Routes
-# ==========================================
-
-# Retrieve list of all ingredients
 @app.get("/api/ingredients", response_model=list[IngredientOut])
 def get_all_ingredients(db: Session = Depends(database.get_db)):
     return db.query(models.Ingredient).order_by(models.Ingredient.ingredient_name.asc()).all()
 
-# post new ingredient
+# enrich existing ingredient
+@app.post("/api/ingredients/enrich/{ingredient_id}", response_model=IngredientOut)
+def enrich_current_ingredient(
+    ingredient_id: int, 
+    db: Session = Depends(database.get_db)
+):
+    # enrich_ingredient_sync handles the 404 check and returns the updated ingredient object
+    return enrich_ingredient_sync(ingredient_id, db)
+
+# Post new ingredient
 @app.post("/api/ingredients", response_model=IngredientOut, status_code=status.HTTP_201_CREATED)
 def create_ingredient(
     payload: IngredientCreate, 
@@ -1309,7 +1564,6 @@ def create_ingredient(
 ):
     clean_name = payload.ingredient_name.strip()
 
-    # Check for existing duplicate
     existing = db.query(models.Ingredient).filter(
         models.Ingredient.ingredient_name.ilike(clean_name)
     ).first()
@@ -1333,15 +1587,56 @@ def create_ingredient(
     db.commit()
     db.refresh(new_ingredient)
 
-    # add nutritional val and missing fields
-    background_tasks.add_task(
-        enrich_ingredient_in_background, 
-        new_ingredient.ingredient_id, 
-        database.SessionLocal
-    )
+    # background_tasks.add_task(
+    #     enrich_ingredient_in_background, 
+    #     new_ingredient.ingredient_id, 
+    #     database.SessionLocal
+    # )
+    threading.Thread(
+        target=enrich_ingredient_in_background,
+        args=(new_ingredient.ingredient_id,),
+        daemon=True
+    ).start()
     
     return new_ingredient
 
+@app.put("/api/ingredients/{ingredient_id}", response_model=IngredientOut)
+def update_ingredient(
+    ingredient_id: int, 
+    request: IngredientEnrichmentPayload, 
+    db: Session = Depends(database.get_db)
+):
+    ingredient = db.query(models.Ingredient).filter(models.Ingredient.ingredient_id == ingredient_id).first()
+    if not ingredient:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Ingredient with ID {ingredient_id} not found."
+        )
+
+    try:
+        if request.ingredient_name is not None:
+            ingredient.ingredient_name = request.ingredient_name
+            
+        ingredient.category = request.category
+        ingredient.price_per_unit = request.price_per_unit
+        ingredient.unit = request.unit
+        ingredient.location = request.location
+        ingredient.season = request.season
+        ingredient.availability = request.availability
+        ingredient.substitutes = request.substitutes
+
+        db.commit()
+        db.refresh(ingredient)
+        return ingredient
+
+    except Exception as e:
+        db.rollback()
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update ingredient: {str(e)}",
+        )
+    
 @app.get("/api/meals", response_model=List[MealOut])
 def get_all_meals(db: Session = Depends(database.get_db)):
     meals = (
@@ -1355,9 +1650,7 @@ def get_all_meals(db: Session = Depends(database.get_db)):
         .all()
     )
     return [format_meal(m) for m in meals]
-
-
-# Post new meal without a given id
+    
 @app.post("/api/meal", response_model=MealOut, status_code=status.HTTP_201_CREATED)
 def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
     new_meal = models.Meal(
@@ -1378,7 +1671,6 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
         ing_id = item.ingredient_id
         db_ing = None
 
-        # Fallback: handle ingredients added purely by text name
         if not ing_id and item.ingredient_name:
             clean_name = item.ingredient_name.strip()
             db_ing = (
@@ -1404,11 +1696,9 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
                     unit=item.unit or "unit",
                 )
             )
-            # Accumulate cost
             if db_ing and db_ing.price_per_unit:
                 total_calculated_cost += float(db_ing.price_per_unit) * qty
 
-    # Fallback to calculated cost if price is 0
     if not new_meal.price_per_serving or new_meal.price_per_serving == 0.0:
         new_meal.price_per_serving = round(total_calculated_cost, 2)
     
@@ -1428,12 +1718,6 @@ def create_meal(meal_data: MealCreate, db: Session = Depends(database.get_db)):
 
     return format_meal(created_meal)
 
-
-# ==========================================
-# Client & Assignment Routes
-# ==========================================
-
-# Get all meal assignments for a client
 @app.get("/api/client/{client_id}/assignments")
 def get_client_assignments(
     client_id: int, db: Session = Depends(database.get_db)
@@ -1474,13 +1758,11 @@ def get_client_assignments(
                     "price_per_serving": getattr(
                         assignment, "price_per_serving", 0.0
                     ),
-                    # If meal is None, return null safely instead of skipping
                     "meal": format_meal(assignment.meal)
                     if assignment.meal
                     else None,
                 }
             )
- 
 
     return {
         "client": {
@@ -1493,7 +1775,6 @@ def get_client_assignments(
         "assignments": result,
     }
 
-# get meals only for current week
 @app.get("/api/client/{client_id}/assignments/week")
 def get_client_weekly_assignments(client_id: int, db: Session = Depends(database.get_db)):
 
@@ -1504,17 +1785,11 @@ def get_client_weekly_assignments(client_id: int, db: Session = Depends(database
             detail=f"Client with ID {client_id} not found"
         )
 
-    # BUGFIX (TODO #9): use the same local "today" the rest of the state
-    # machine uses (REFERENCE_TZ), not the server's naive date.today() -
-    # near midnight these can disagree by hours depending on where the
-    # server actually runs vs. where clients are (e.g. Africa/Nairobi).
     today = statemachine._local_now().date()
-    start_of_week = today - timedelta(days=today.weekday())  # Monday
-    end_of_week = start_of_week + timedelta(days=6)          # Sunday
+    start_of_week = today - timedelta(days=today.weekday())
+    end_of_week = start_of_week + timedelta(days=6)
 
-    # TODO #11: from Friday onward, also surface next week so clients can
-    # plan ahead instead of only seeing the current Mon-Sun window.
-    if today.weekday() >= 4:  # Fri=4, Sat=5, Sun=6
+    if today.weekday() >= 4:
         end_of_week += timedelta(days=7)
 
     assignments = (
@@ -1558,7 +1833,6 @@ def get_client_weekly_assignments(client_id: int, db: Session = Depends(database
         "assignments": result,
     }
 
-# Post new client
 @app.post("/api/client/new", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
 def create_client(payload: ClientCreate, db: Session = Depends(database.get_db)):
     clean_name = payload.client_name.strip()
@@ -1579,13 +1853,139 @@ def create_client(payload: ClientCreate, db: Session = Depends(database.get_db))
     db.refresh(new_client)
     return new_client
 
+@app.post("/api/operator/menu/apply-meal", response_model=OperatorApplyResponse)
+def operator_apply_meal(
+    request: OperatorApplyRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db)
+):
+    meal_data = request.selected_meal
+    ingredient_items = meal_data.get("ingredients", [])
+    
+    ingredients_to_enrich = []
+    processed_ingredients = []
 
-# EXHANGE LOG REFAC
+    # Iterate through ingredients, create missing ones in the database, and queue enrichment
+    for ing_item in ingredient_items:
+        ing_name = str(ing_item.get("ingredient_name", ing_item.get("name", ""))).strip()
+        if not ing_name:
+            continue
+
+        try:
+            qty = float(ing_item.get("ingredient_quantity", ing_item.get("quantity", 1.0)))
+        except (ValueError, TypeError):
+            qty = 1.0
+        unit = str(ing_item.get("unit", "unit")).strip() or "unit"
+
+        db_ing = (
+            db.query(models.Ingredient)
+            .filter(models.Ingredient.ingredient_name.ilike(ing_name))
+            .first()
+        )
+
+        is_new = False
+        if not db_ing:
+            db_ing = models.Ingredient(ingredient_name=ing_name)
+            db.add(db_ing)
+            db.flush()
+            is_new = True
+
+        if is_new or not db_ing.nutrition:
+            if db_ing.ingredient_id not in ingredients_to_enrich:
+                ingredients_to_enrich.append(db_ing.ingredient_id)
+
+        processed_ingredients.append({
+            "ingredient_id": db_ing.ingredient_id,
+            "ingredient_name": db_ing.ingredient_name,
+            "ingredient_quantity": round(qty, 2),
+            "unit": unit
+        })
+
+    db.commit()
+
+    # Trigger background enrichment for any newly synthesized ingredients
+    for ing_id in ingredients_to_enrich:
+        threading.Thread(
+            target=enrich_ingredient_in_background,
+            args=(ing_id,),
+            daemon=True
+        ).start()
+
+    return {
+        "message": "Successfully registered missing ingredients and prepared meal for editing.",
+        "processed_ingredients": processed_ingredients,
+    }
+
+@app.post("/api/operator/menu/generate-meal", response_model=OperatorGenerateResponse)
+def operator_generate_meal(
+    request: OperatorGenerateRequest,
+    db: Session = Depends(database.get_db)
+):
+    # 1. Construct Gemini system/user prompt to return 1-4 options
+    system_prompt = """
+        You are an expert AI institutional meal planning and recipe generation assistant.
+        Your task is to generate between 1 and 4 complete, high-quality alternative meal options based on operator constraints and prompts.
+        
+        ### Strict Unit & Pricing Standardization: ###
+        1. `unit` and `nutrition.serving_unit` MUST be strictly restricted to one of these exact strings: 
+        `"g"`, `"kg"`, `"ml"`, `"l"`, `"tbsp"`, `"tsp"`, or `"unit"`. Never invent custom units (e.g., avoid "oz", "cup", or "pinch" unless converted).
+        2. `price_per_unit` MUST represent the total cost for exactly **one** base unit of whatever is declared in `unit` (e.g., the cost for 1 kg if unit is `"kg"`,
+        1 liter if unit is `"l"`, or 1 individual item if unit is `"unit"`), never a custom recipe portion or arbitrary package size.
+
+        Rules:
+        1. Provide a realistic meal name, calorie count per serving, and nutritional score for each option.
+        2. Provide a list of ingredients with precise quantities and units tailored for one serving.
+        3. You MUST respond strictly with a valid JSON array of objects matching the exact structure below:
+        [
+            {
+                "meal_name": "Generated Meal Name 1",
+                "calories_per_serving": 550.0,
+                "nutritional_score": 8.5,
+                "ingredients": [
+                    {
+                        "ingredient_name": "Ingredient 1",
+                        "ingredient_quantity": 2.0,
+                        "unit": "kg"
+                    }
+                ]
+            }
+        ]
+    """
+
+    user_context = f"""
+        Target Servings: {request.servings}
+        Unavailable Ingredients to Avoid: {', '.join(request.unavailable_ingredients) or 'None'}
+        Insufficient Ingredients to Adjust: {', '.join(request.insufficient_ingredients) or 'None'}
+        Operator Prompt / Instructions: {request.user_prompt}
+    """
+
+    try:
+        raw_json_text = call_llm_with_fallback(system_prompt, user_context, MealCreate)
+        parsed_data = json.loads(raw_json_text)
+        
+        # Ensure we're working with a list of options
+        options = parsed_data if isinstance(parsed_data, list) else [parsed_data]
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"LLM generation failed: {str(e)}",
+        )
+
+    # Pick the primary meal as the first element, and any remaining as alternatives
+    primary_meal = options[0] if options else {}
+    alternative_meals = options[1:] if len(options) > 1 else []
+
+    return {
+        "reply": f"Successfully generated {len(options)} meal option(s).",
+        "meal": primary_meal,
+        "alternatives": alternative_meals
+    }
+
 @app.post("/api/chat/regenerate-meal", response_model=RegenerateResponse)
 def regenerate_meal_options(
     request: RegenerateRequest, db: Session = Depends(database.get_db)
 ):
-    # Fetch meal with eager-loaded ingredients
     meal = (
         db.query(models.Meal)
         .options(
@@ -1626,7 +2026,6 @@ def regenerate_meal_options(
             detail=f"This assignment is '{assignment.status}' and cannot be regenerated by the client.",
         )
 
-    # Extract ingredient list correctly from relational model
     ingredient_names = [
         mi.ingredient.ingredient_name
         for mi in meal.meal_ingredients
@@ -1654,51 +2053,14 @@ def regenerate_meal_options(
         2. **Subsequent Versions:** When a user requests an adjustment, modification, or iteration to an existing meal, increment the version sequentially (e.g., "Garlic Herb Chicken v2", "Garlic Herb Chicken v3").
         3. **Metadata Tracking:** Always include a `version_number` integer (1 for original, 2 for v2, etc.) and a `version_label` string (e.g., "", "v2", "v3") in your JSON response structure.
         
-        
-        
-        ### REQUIRED JSON OUTPUT FORMAT
-        You MUST reply strictly with a valid JSON object matching this structure:
-        {{
-            "reply": "A concise message to the user explaining the adjustments made.",
-            "edited_meal": {{
-                "meal_id": {meal.meal_id},
-                "meal_name": "Adjusted Meal Name",
-                "calories_per_serving": {meal.calories_per_serving or 0},
-                "nutritional_score": "{meal.nutritional_score or '0.0'}",
-                "ingredients": [
-                    {{
-                        "ingredient_name": "Ingredient 1",
-                        "ingredient_quantity": 1.5,
-                        "unit": "cups"
-                    }}
-                ],
-                "is_edited_original": true
-            }},
-            "alternatives": [
-                {{
-                    "meal_id": 9901,
-                    "meal_name": "New Dish Name",
-                    "calories_per_serving": 520,
-                    "nutritional_score": "8.5",
-                    "ingredients": [
-                        {{
-                            "ingredient_name": "Ingredient A",
-                            "ingredient_quantity": 2.0,
-                            "unit": "tbsp"
-                        }}
-                    ],
-                    "is_alternative": true
-                }}
-            ]
-        }} 
+        ### Strict Unit & Pricing Standardization: ###
+        1. `unit` and `nutrition.serving_unit` MUST be strictly restricted to one of these exact strings: 
+        `"g"`, `"kg"`, `"ml"`, `"l"`, `"tbsp"`, `"tsp"`, or `"unit"`. Never invent custom units (e.g., avoid "oz", "cup", or "pinch" unless converted).
+        2. `price_per_unit` MUST represent the total cost for exactly **one** base unit of whatever is declared in `unit` (e.g., the cost for 1 kg if unit is `"kg"`,
+        1 liter if unit is `"l"`, or 1 individual item if unit is `"unit"`), never a custom recipe portion or arbitrary package size.
     """
 
-    # Format previous chat history as Gemini `Content` turns (role must be
-    # "user" or "model" - Groq/OpenAI-style "assistant" isn't valid here,
-    # and the conversation must start on a "user" turn)
-    contents = build_gemini_history_contents(request.chat_history)
-
-    # Append current context and constraints
+    # user context should include the previous chats which will indicate user preferences
     user_context = f"""
         Current Meal Name: {meal.meal_name} (ID: {meal.meal_id})
         Current Ingredients: {original_ingredients_str}
@@ -1707,29 +2069,22 @@ def regenerate_meal_options(
         Insufficient Ingredients to Reduce/Replace: {', '.join(request.insufficient_ingredients) or 'None'}
         User Request: {request.user_prompt or 'Generate alternative meal options based on constraints.'}
     """
-    contents.append(types.Content(role="user", parts=[types.Part(text=user_context)]))
 
-    # Call Gemini API with JSON mode
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                response_mime_type="application/json",
-            ),
+        raw_response = call_llm_with_fallback(
+            system_prompt=system_prompt,
+            user_prompt=user_context,
+            response_schema=RegenerateResponse,
         )
 
-        parsed_data = json.loads(response.text)
-
+        parsed_data = json.loads(raw_response)
         return RegenerateResponse(**parsed_data)
 
     except json.JSONDecodeError:
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Gemini LLM returned malformed JSON string.",
+            detail="LLM returned malformed JSON string.",
         )
     except ValidationError as ve:
         traceback.print_exc()
@@ -1741,24 +2096,15 @@ def regenerate_meal_options(
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gemini API Error: {str(e)}",
+            detail=f"LLM Error: {str(e)}",
         )
-
-# UNTESTED/UNIMPLEMENTED
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
-from sqlalchemy.orm import Session, joinedload
-from datetime import datetime
-import json
-
-# (Assumes standard imports for models, database, statemachine, format_meal, etc.)
-
+    
 @app.post("/api/client/menu/apply-selection")
 def apply_meal_selection(
     request: ApplySelectionRequest, 
     background_tasks: BackgroundTasks, 
     db: Session = Depends(database.get_db)
 ):
-    # Fetch assignment record
     assignment = (
         db.query(models.MealAssignment)
         .filter(
@@ -1790,7 +2136,6 @@ def apply_meal_selection(
     is_edited = selected.get("is_edited_original", False)
     is_alternative = selected.get("is_alternative", False)
 
-    # Check if this meal exists in DB
     existing_meal = None
     if raw_meal_id and not is_edited and not is_alternative:
         existing_meal = (
@@ -1799,25 +2144,21 @@ def apply_meal_selection(
             .first()
         )
 
-    # Keep track of ingredient IDs that need LLM background enrichment
     ingredients_to_enrich = []
 
-    # Determine if we need to persist a NEW meal or use an existing one
     if existing_meal:
         chosen_meal = existing_meal
     else:
-        # Create a new Meal record in DB
         chosen_meal = models.Meal(
             meal_name=selected.get("meal_name", "Adapted Meal").strip(),
             parent_meal_id=previous_meal_id if is_edited else None,
             status=MealStatus.DRAFT,
-            calories_per_serving=selected.get("calories_per_serving"),
-            nutritional_score=str(selected.get("nutritional_score", "0.0")),
+            calories_per_serving=float(selected.get("calories_per_serving") or 0.0),
+            nutritional_score=float(selected.get("nutritional_score") or 0.0),
         )
         db.add(chosen_meal)
-        db.flush()  # Generates chosen_meal.meal_id
+        db.flush()
 
-        # Attach ingredients to join table (models.MealIngredients)
         ingredient_list = selected.get("ingredients", [])
         for ing_item in ingredient_list:
             if isinstance(ing_item, dict):
@@ -1840,7 +2181,6 @@ def apply_meal_selection(
             if not ing_name:
                 continue
 
-            # Lookup existing ingredient or create new one
             db_ing = (
                 db.query(models.Ingredient)
                 .filter(models.Ingredient.ingredient_name.ilike(ing_name))
@@ -1854,7 +2194,6 @@ def apply_meal_selection(
                 db.flush()
                 is_new = True
 
-            # Track new or un-enriched ingredients for background LLM processing
             if is_new or not db_ing.nutrition:
                 if db_ing.ingredient_id not in ingredients_to_enrich:
                     ingredients_to_enrich.append(db_ing.ingredient_id)
@@ -1868,7 +2207,6 @@ def apply_meal_selection(
                 )
             )
 
-    # Update the assignment to point to chosen_meal
     assignment.meal_id = chosen_meal.meal_id
     db.flush()
     
@@ -1913,7 +2251,6 @@ def apply_meal_selection(
         )
         db.add(log)
 
-    # Let the state machine decide whether the previous meal reverts to Draft
     if previous_meal_id and previous_meal_id != chosen_meal.meal_id:
         prev_meal = (
             db.query(models.Meal)
@@ -1925,15 +2262,18 @@ def apply_meal_selection(
  
     db.commit()
 
-    # Trigger background enrichment tasks for any new/un-enriched ingredients
     for ing_id in ingredients_to_enrich:
-        background_tasks.add_task(
-            enrich_ingredient_in_background,
-            ingredient_id=ing_id,
-            db_session_factory=database.SessionLocal,
-        )
+        # background_tasks.add_task(
+        #     enrich_ingredient_in_background,
+        #     ingredient_id=ing_id,
+        #     db_session_factory=database.SessionLocal,
+        # )
+        threading.Thread(
+                target=enrich_ingredient_in_background,
+                args=(ing_id,),
+                daemon=True
+            ).start()
 
-    # Eager load full meal details for UI return payload
     final_meal = (
         db.query(models.Meal)
         .options(
@@ -1952,18 +2292,14 @@ def apply_meal_selection(
         "assigned_meal": format_meal(final_meal),
     }
 
-# Fetch all clients (used for dropdowns/modals in frontend)
 @app.get("/api/clients", response_model=List[ClientResponse])
 def get_all_clients(db: Session = Depends(database.get_db)):
     return db.query(models.Client).order_by(models.Client.client_name.asc()).all()
 
-
-#basic chat edpoint
 @app.post("/api/client/menu/chat")
-def chat_with_gemini(
+def client_meal_generation_chat(
     request: ChatRequest, db: Session = Depends(database.get_db)
 ):
-    # 1. Fetch current context (assigned meal for this day)
     assignment = (
         db.query(models.MealAssignment)
         .filter(
@@ -1980,7 +2316,6 @@ def chat_with_gemini(
             f"({assignment.meal.calories_per_serving or 'N/A'} kcal)."
         )
 
-    # Build system prompt with meal context
     system_prompt = (
         "You are an AI nutrition and meal planning assistant. "
         f"You are talking with client ID {request.client_id} regarding their menu for {request.assignment_date}. "
@@ -1988,19 +2323,10 @@ def chat_with_gemini(
         "Provide concise, practical, and friendly answers to questions about ingredients, substitutions, or menu tweaks. "
     )
 
-    # Call Gemini API
-    try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=request.message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                max_output_tokens=400,
-            ),
-        )
+    history = build_gemini_history_contents(getattr(request, "chat_history", []))
 
-        response_text = response.text
+    try:
+        response_text = call_chat_with_fallback(system_prompt, history, request.message)
 
         return {
             "response": response_text,
@@ -2011,8 +2337,9 @@ def chat_with_gemini(
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gemini API Error: {str(e)}",
+            detail=f"Chat API Error: {str(e)}",
         )
+
 
 @app.post("/api/operator/menu/chat")
 def operator_meal_generation_chat(
@@ -2027,26 +2354,11 @@ def operator_meal_generation_chat(
         "that work around the listed inventory constraints, and help tailor recipes for batch serving."
     )
 
-    # Same leading-role fix as regenerate_meal_options: the operator UI seeds
-    # its local chat history with a synthetic "Start chat" assistant message,
-    # so the raw history's first turn is role "model" - Gemini requires
-    # conversations to start on "user". build_gemini_history_contents()
-    # strips any such leading non-user turns before we append the new message.
     contents = build_gemini_history_contents(request.chat_history)
-    contents.append(types.Content(role="user", parts=[types.Part(text=request.message)]))
+    history_subset = contents[:-1] if len(contents) > 1 else []
 
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                max_output_tokens=400,
-            ),
-        )
-
-        response_text = response.text
+        response_text = call_chat_with_fallback(system_prompt, history_subset, request.message)
 
         return {
             "response": response_text,
@@ -2057,5 +2369,5 @@ def operator_meal_generation_chat(
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gemini Chat API Error: {str(e)}",
+            detail=f"Chat API Error: {str(e)}",
         )

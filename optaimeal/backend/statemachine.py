@@ -145,18 +145,32 @@ def meal_has_live_assignment(meal_id: int, db: Session) -> bool:
         is not None
     )
 
+def meal_has_locked_or_archived_assignment(meal_id: int, db: Session) -> bool:
+    """A meal becomes Active only if it's referenced by at least one Locked or Archived assignment."""
+    return (
+        db.query(models.MealAssignment)
+        .filter(
+            models.MealAssignment.meal_id == meal_id,
+            models.MealAssignment.status.in_([AssignmentStatus.LOCKED, AssignmentStatus.ARCHIVED]),
+        )
+        .first()
+        is not None
+    )
+
 
 def sync_meal_status(meal: "models.Meal", db: Session) -> bool:
     """
     Auto-manage Draft <-> Active based on usage.
-    Archived is a manual, one-way operator action and is never touched here -
-    an Archived meal stays Archived even if all its assignments later change.
-    Returns True if status changed.
+    A meal is Active if it's attached to at least one Locked or Archived
+    assignment - once live/served, the operator can no longer edit it in
+    place (must fork). A meal with only Scheduled assignments (or none) is
+    still Draft, since the operator can still freely reassign/edit it.
+    Archived is a manual, one-way operator action and is never touched here.
     """
     if meal.status == MealStatus.ARCHIVED:
         return False
 
-    should_be_active = meal_has_live_assignment(meal.meal_id, db)
+    should_be_active = meal_has_locked_or_archived_assignment(meal.meal_id, db)
     correct_status = MealStatus.ACTIVE if should_be_active else MealStatus.DRAFT
 
     if meal.status != correct_status:
@@ -172,30 +186,16 @@ def sync_meal_status(meal: "models.Meal", db: Session) -> bool:
 def can_operator_edit_assignment(assignment: "models.MealAssignment") -> bool:
     return assignment.status == AssignmentStatus.SCHEDULED
 
+
 def can_client_edit_assignment(assignment: "models.MealAssignment", now: Optional[datetime] = None) -> bool:
     """
-    Client edits are allowed for the CURRENT DAY plus any remaining days 
-    in the current week that have not yet passed.
-    Past days in the week are locked, and next week's meals are not yet editable.
+    Per spec the whole week locks/unlocks together (see week_lock_boundary) -
+    there's no per-day distinction within a Locked week. Once an assignment
+    is Locked, the client can edit it (regenerate/apply-selection) regardless
+    of which day of that week it falls on. `now` is accepted for signature
+    symmetry with other status helpers but isn't needed for this check.
     """
-    if assignment.status != AssignmentStatus.LOCKED:
-        return False
-
-    asgn_date = (
-        date.fromisoformat(assignment.assignment_date)
-        if isinstance(assignment.assignment_date, str)
-        else assignment.assignment_date
-    )
-    
-    today = _local_now(now).date()
-    
-    # Calculate the end of the current week (Assuming Monday=0, Sunday=6)
-    # This finds how many days are left until Sunday, and adds them to today.
-    days_until_sunday = 6 - today.weekday()
-    end_of_week = today + timedelta(days=days_until_sunday)
-    
-    # Must be today or later, AND must not exceed the current week's Sunday
-    return today <= asgn_date <= end_of_week
+    return assignment.status == AssignmentStatus.LOCKED
 
 
 def can_edit_meal_in_place(meal: "models.Meal") -> bool:
